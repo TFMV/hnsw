@@ -1,18 +1,12 @@
-# hnsw
+# HNSW - Hierarchical Navigable Small World Graphs in Go
 
-[![GoDoc](https://godoc.org/github.com/golang/gddo?status.svg)](https://pkg.go.dev/github.com/coder/hnsw@main?utm_source=godoc)
-![Go workflow status](https://github.com/coder/hnsw/actions/workflows/go.yaml/badge.svg)
+> This library is a fork of the original implementation by [Coder](https://github.com/coder/hnsw), enhanced with additional features, optimizations, and extensions. We acknowledge and thank the original authors for their excellent work.
 
-Please note this is a fork of the core implementation at github.com/coder/hnsw.
+## Overview
 
-Package `hnsw` implements Hierarchical Navigable Small World graphs in Go. You
-can read up about how they work [here](https://www.pinecone.io/learn/series/faiss/hnsw/). In essence,
-they allow for fast approximate nearest neighbor searches with high-dimensional
-vector data.
+Package `hnsw` implements Hierarchical Navigable Small World graphs in Go, providing an efficient solution for approximate nearest neighbor search in high-dimensional vector spaces. HNSW graphs enable fast similarity search operations with logarithmic complexity, making them ideal for applications like semantic search, recommendation systems, and image similarity.
 
-This package can be thought of as an in-memory alternative to your favorite
-vector database (e.g. Pinecone, Weaviate). It implements just the essential
-operations:
+This library can be used as an in-memory alternative to vector databases (e.g., Pinecone, Weaviate), implementing essential vector operations with high performance:
 
 | Operation | Complexity            | Description                                  |
 | --------- | --------------------- | -------------------------------------------- |
@@ -20,20 +14,16 @@ operations:
 | Delete    | $O(M^2 \cdot log(n))$ | Delete a vector from the graph               |
 | Search    | $O(log(n))$           | Search for the nearest neighbors of a vector |
 | Lookup    | $O(1)$                | Retrieve a vector by ID                      |
-| Extensions| -                     | Add metadata, faceted search, and more       |
 
-> [!NOTE]
-> Complexities are approximate where $n$ is the number of vectors in the graph
-> and $M$ is the maximum number of neighbors each node can have. This [paper](https://arxiv.org/pdf/1603.09320) is a good resource for understanding the effect of
-> the various construction parameters.
+The library also includes extensions for metadata storage, faceted search, and other advanced features.
 
-## Usage
+## Installation
 
 ```text
 go get github.com/TFMV/hnsw@main
 ```
 
-### Basic Usage
+## Basic Usage
 
 ```go
 // Create a new graph with default parameters
@@ -54,11 +44,12 @@ neighbors, err := g.Search(
 if err != nil {
     log.Fatalf("failed to search graph: %v", err)
 }
-fmt.Printf("best friend: %v\n", neighbors[0].Value)
-// Output: best friend: [1 1 1]
+fmt.Printf("best match: %v\n", neighbors[0].Value)
 ```
 
-### Thread-Safe Usage
+## Thread-Safe Operations
+
+The library supports concurrent operations with a thread-safe implementation:
 
 ```go
 // Create a thread-safe graph with custom parameters
@@ -66,13 +57,6 @@ g, err := hnsw.NewGraphWithConfig[int](16, 0.25, 20, hnsw.EuclideanDistance)
 if err != nil {
     log.Fatalf("failed to create graph: %v", err)
 }
-
-// Add some initial nodes
-g.Add(
-    hnsw.MakeNode(1, []float32{1, 1, 1}),
-    hnsw.MakeNode(2, []float32{1, -1, 0.999}),
-    hnsw.MakeNode(3, []float32{1, 0, -0.5}),
-)
 
 // Perform concurrent operations
 var wg sync.WaitGroup
@@ -93,24 +77,20 @@ for i := 0; i < numOperations; i++ {
     }(i)
 }
 
-// Wait for all operations to complete
 wg.Wait()
 ```
 
 ## Persistence
 
-While all graph operations are in-memory, `hnsw` provides facilities for loading/saving from persistent storage.
-
-For an `io.Reader`/`io.Writer` interface, use `Graph.Export` and `Graph.Import`.
-
-If you're using a single file as the backend, hnsw provides a convenient `SavedGraph` type instead:
+The library provides facilities for saving and loading graphs from persistent storage:
 
 ```go
-path := "some.graph"
+path := "my_graph.hnsw"
 g1, err := LoadSavedGraph[int](path)
 if err != nil {
     panic(err)
 }
+
 // Insert some vectors
 for i := 0; i < 128; i++ {
     g1.Add(hnsw.MakeNode(i, []float32{float32(i)}))
@@ -130,127 +110,76 @@ if err != nil {
 }
 ```
 
-See more:
+## Advanced Features
 
-* [Export](https://pkg.go.dev/github.com/coder/hnsw#Graph.Export)
-* [Import](https://pkg.go.dev/github.com/coder/hnsw#Graph.Import)
-* [SavedGraph](https://pkg.go.dev/github.com/coder/hnsw#SavedGraph)
+### Batch Operations
 
-We use a fast binary encoding for the graph, so you can expect to save/load
-nearly at disk speed. On my M3 Macbook I get these benchmark results:
+For high-throughput scenarios, batch operations reduce lock contention:
 
-```text
-goos: darwin
-goarch: arm64
-pkg: github.com/coder/hnsw
-BenchmarkGraph_Import-16            4029            259927 ns/op         796.85 MB/s      496022 B/op       3212 allocs/op
-BenchmarkGraph_Export-16            7042            168028 ns/op        1232.49 MB/s      239886 B/op       2388 allocs/op
-PASS
-ok      github.com/coder/hnsw   2.624s
+```go
+// Add a batch of nodes in a single operation
+batch := make([]hnsw.Node[int], 5)
+for i := range batch {
+    nodeID := 100 + i
+    vector := []float32{float32(i) * 0.5, float32(i) * 0.5, float32(i) * 0.5}
+    batch[i] = hnsw.MakeNode(nodeID, vector)
+}
+g.BatchAdd(batch)
+
+// Perform multiple searches in a single operation
+queries := [][]float32{
+    {0.1, 0.1, 0.1},
+    {0.2, 0.2, 0.2},
+    {0.3, 0.3, 0.3},
+}
+batchResults, _ := g.BatchSearch(queries, 2)
+
+// Delete multiple nodes in a single operation
+keysToDelete := []int{100, 101, 102}
+deleteResults := g.BatchDelete(keysToDelete)
 ```
 
-when saving/loading a graph of 100 vectors with 256 dimensions.
+### Negative Examples
 
-## Performance
+Find vectors similar to your query but dissimilar to specified negative examples:
 
-By and large the greatest effect you can have on the performance of the graph
-is reducing the dimensionality of your data. At 1536 dimensions (OpenAI default),
-70% of the query process under default parameters is spent in the distance function.
+```go
+// Search with a single negative example
+dogQuery := []float32{1.0, 0.2, 0.1, 0.0}      // dog query
+puppyNegative := []float32{0.9, 0.3, 0.2, 0.1} // puppy (negative example)
 
-If you're struggling with slowness / latency, consider:
+// Find dog-related concepts but not puppies (negativeWeight = 0.5)
+results, err := g.SearchWithNegative(dogQuery, puppyNegative, 3, 0.5)
 
-* Reducing dimensionality
-* Increasing $M$
+// Search with multiple negative examples
+petQuery := []float32{0.3, 0.3, 0.3, 0.3}      // general pet query
+negatives := []hnsw.Vector{dogNegative, catNegative}
 
-And, if you're struggling with excess memory usage, consider:
+// Find pet-related concepts but not dogs or cats (negativeWeight = 0.7)
+results, err = g.SearchWithNegatives(petQuery, negatives, 3, 0.7)
+```
 
-* Reducing $M$ a.k.a `Graph.M` (the maximum number of neighbors each node can have)
-* Reducing $m_L$ a.k.a `Graph.Ml` (the level generation parameter)
+### Quality Metrics
 
-## Memory Overhead
+Evaluate graph structure and performance:
 
-The memory overhead of a graph looks like:
+```go
+analyzer := hnsw.Analyzer[int]{Graph: graph}
+metrics := analyzer.QualityMetrics()
 
-$$
-\displaylines{
-mem_{graph} = n \cdot \log(n) \cdot \text{size(id)} \cdot M \\
-mem_{base} = n \cdot d \cdot 4 \\
-mem_{total} = mem_{graph} + mem_{base}
-}
-$$
+fmt.Printf("Node count: %d\n", metrics.NodeCount)
+fmt.Printf("Average connectivity: %.2f\n", metrics.AvgConnectivity)
+fmt.Printf("Layer balance: %.2f\n", metrics.LayerBalance)
+fmt.Printf("Distortion ratio: %.2f\n", metrics.DistortionRatio)
+```
 
-where:
+## Extensions
 
-* $n$ is the number of vectors in the graph
-* $\text{size(key)}$ is the average size of the key in bytes
-* $M$ is the maximum number of neighbors each node can have
-* $d$ is the dimensionality of the vectors
-* $mem_{graph}$ is the memory used by the graph structure across all layers
-* $mem_{base}$ is the memory used by the vectors themselves in the base or 0th layer
+The library includes several extensions for enhanced functionality:
 
-You can infer that:
+### Metadata Extension
 
-* Connectivity ($M$) is very expensive if keys are large
-* If $d \cdot 4$ is far larger than $M \cdot \text{size(key)}$, you should expect linear memory usage spent on representing vector data
-* If $d \cdot 4$ is far smaller than $M \cdot \text{size(key)}$, you should expect $n \cdot \log(n)$ memory usage spent on representing graph structure
-
-In the example of a graph with 256 dimensions, and $M = 16$, with 8 byte keys, you would see that each vector takes:
-
-* $256 \cdot 4 = 1024$ data bytes
-* $16 \cdot 8 = 128$ metadata bytes
-
-and memory growth is mostly linear.
-
----
-
-## Recent Changes (TFMV)
-
-### Error Handling Improvements
-
-* Comprehensive error checking for invalid parameters:
-  * Validation for M, Ml, and EfSearch parameters
-  * Dimension matching between query vectors and graph vectors
-  * Proper handling of nil nodes and edge cases
-
-### Experimental Performance Optimizations
-
-* **Vectorized Distance Calculations**: Improved performance for high-dimensional vectors.
-* **Parallel Search**: Added `ParallelSearch` method that automatically parallelizes search operations for large graphs and high-dimensional data.
-* **Optimized Node Management**: Enhanced neighbor selection and connectivity maintenance.
-* **Thread-Safe Implementation**: Added synchronization primitives to enable concurrent operations.
-* **Batch Operations**: Added `BatchAdd`, `BatchSearch`, and `BatchDelete` methods for high-throughput scenarios.
-
-### Experimental New APIs
-
-* **Configuration Validation**: Added `Validate()` method to check graph configuration parameters.
-* **NewGraphWithConfig**: Constructor that validates parameters during graph creation.
-* **MakeNode**: Helper function to create nodes with proper typing.
-* **Quality Metrics**: New `QualityMetrics()` method in the Analyzer to evaluate graph quality.
-* **BatchAdd**: Add multiple nodes in a single operation with a single lock acquisition.
-* **BatchSearch**: Perform multiple searches in a single operation with a single lock acquisition.
-* **BatchDelete**: Remove multiple nodes in a single operation with a single lock acquisition, returning a boolean slice indicating which keys were successfully deleted.
-* **Negative Examples**: New methods to search with negative examples:
-  * `SearchWithNegative`: Search with a single negative example.
-  * `SearchWithNegatives`: Search with multiple negative examples.
-  * `BatchSearchWithNegatives`: Batch search with negative examples.
-
-### Extensions
-
-The library now includes a set of extensions that provide additional functionality for specific use cases. These extensions are located in the `hnsw-extensions` directory.
-
-#### Metadata Extension
-
-The metadata extension allows you to store and retrieve JSON metadata alongside vectors in HNSW graphs. This is useful for applications where you need to associate additional information with each vector, such as product details, document attributes, or user profiles.
-
-**Key features:**
-
-* Store arbitrary JSON metadata with each node
-* Retrieve metadata with search results
-* Type-safe implementation using Go generics
-* Memory-efficient storage
-* Support for all HNSW search operations
-
-Example usage:
+Store and retrieve JSON metadata alongside vectors:
 
 ```go
 // Create a graph and metadata store
@@ -281,52 +210,16 @@ if err != nil {
 // Search with metadata
 query := []float32{0.1, 0.2, 0.3}
 results, err := metadataGraph.Search(query, 10)
-if err != nil {
-    log.Fatalf("Search failed: %v", err)
-}
-
-// Access metadata in search results
-for i, result := range results {
-    var metadata map[string]interface{}
-    err := result.GetMetadataAs(&metadata)
-    if err != nil {
-        log.Printf("Failed to get metadata for result %d: %v", i, err)
-        continue
-    }
-    
-    fmt.Printf("Result %d: %s - $%.2f (%s)\n", 
-        i+1, 
-        metadata["name"], 
-        metadata["price"], 
-        metadata["category"],
-    )
-}
 ```
 
-[Learn more about the Metadata Extension](./hnsw-extensions/meta/README.md)
+### Faceted Search Extension
 
-#### Faceted Search Extension
-
-The faceted search extension enables filtering and aggregation of search results based on facets (attributes). This is particularly useful for e-commerce, document search, and other applications where users need to narrow down search results by specific criteria.
-
-**Key features:**
-
-* Filter search results by facet values
-* Support for multiple filter types (exact match, range, contains)
-* Negative filtering to exclude specific items
-* Facet aggregation to count occurrences of facet values
-* Efficient implementation that leverages HNSW's fast search capabilities
-
-Example usage:
+Filter and aggregate search results based on facets:
 
 ```go
-// Create a new HNSW graph
-graph := hnsw.NewGraph[int]()
-
-// Create a facet store
-store := facets.NewMemoryFacetStore[int]()
-
 // Create a faceted graph
+graph := hnsw.NewGraph[int]()
+store := facets.NewMemoryFacetStore[int]()
 facetedGraph := facets.NewFacetedGraph(graph, store)
 
 // Add a node with facets
@@ -335,7 +228,6 @@ productFacets := []facets.Facet{
     facets.NewBasicFacet("category", "Electronics"),
     facets.NewBasicFacet("price", 999.99),
     facets.NewBasicFacet("brand", "TechCo"),
-    facets.NewBasicFacet("tag", "smartphone"),
 }
 
 facetedNode := facets.NewFacetedNode(node, productFacets)
@@ -354,234 +246,72 @@ results, err := facetedGraph.Search(
 )
 ```
 
-[Learn more about the Faceted Search Extension](./hnsw-extensions/facets/README.md)
+### Arrow Extension
 
-#### Running the Examples
-
-To run the examples for all extensions, use the following command:
-
-```bash
-cd hnsw-extensions
-go run main.go
-```
-
-This will demonstrate the usage of each extension with practical examples.
-
-### Experimental Quality Metrics
-
-The Analyzer now provides experimental quality metrics to evaluate graph structure:
-
-* **Connectivity Analysis**: Measure average connections per node and distribution.
-* **Distortion Ratio**: Evaluate how well the graph preserves actual distances.
-* **Layer Balance**: Assess the distribution of nodes across layers.
-* **Graph Structure**: Analyze topography and connectivity patterns.
-
-Example usage:
+Integrate with Apache Arrow for efficient vector storage and interoperability:
 
 ```go
-analyzer := hnsw.Analyzer[int]{Graph: graph}
-metrics := analyzer.QualityMetrics()
+// Create an Arrow-backed graph
+dimensions := 128
+graph := arrow.NewArrowGraph[int](dimensions)
 
-fmt.Printf("Node count: %d\n", metrics.NodeCount)
-fmt.Printf("Average connectivity: %.2f\n", metrics.AvgConnectivity)
-fmt.Printf("Layer balance: %.2f\n", metrics.LayerBalance)
-fmt.Printf("Distortion ratio: %.2f\n", metrics.DistortionRatio)
+// Create an Arrow vector
+values := []float32{0.1, 0.2, 0.3, /* ... more values ... */}
+vector := arrow.CreateArrowVector(values)
+
+// Add a vector to the graph
+err := graph.Add(1, vector)
+if err != nil {
+    log.Fatalf("Failed to add vector: %v", err)
+}
+
+// Search for similar vectors
+query := arrow.CreateArrowVector([]float32{0.15, 0.25, 0.35, /* ... more values ... */})
+results, err := graph.Search(query, 5)
+if err != nil {
+    log.Fatalf("Search failed: %v", err)
+}
+
+// Batch operations with Arrow vectors
+ids := []int{2, 3, 4}
+vectors := [][]float32{
+    {0.2, 0.3, 0.4, /* ... more values ... */},
+    {0.3, 0.4, 0.5, /* ... more values ... */},
+    {0.4, 0.5, 0.6, /* ... more values ... */},
+}
+batchVectors := arrow.CreateArrowVectorBatch(vectors)
+err = graph.BatchAdd(ids, batchVectors)
 ```
 
-### Testing
+## Performance Considerations
 
-* **Benchmark Suite**: Comprehensive benchmarks for various graph sizes and dimensions.
-* **Validation Tests**: Tests to ensure proper error handling for invalid configurations.
-* **Performance Comparisons**: Benchmarks comparing sequential vs. parallel search performance.
-* **Quality Metrics Tests**: Validation of graph quality measurement functions.
-* **Concurrency Tests**: Tests to verify thread safety under concurrent operations.
+For optimal performance:
 
-### Thread Safety
+1. **Dimensionality**: Reducing vector dimensions significantly improves performance
+2. **Connectivity (M)**: Higher values improve search accuracy but increase memory usage
+3. **Level Factor (Ml)**: Controls the graph hierarchy; lower values create more layers
+4. **EfSearch**: Higher values improve search accuracy at the cost of speed
 
-The HNSW implementation now supports concurrent operations through a thread-safe design:
+## Memory Usage
 
-```go
-// Create a thread-safe graph
-g, err := hnsw.NewGraphWithConfig[int](16, 0.25, 20, hnsw.EuclideanDistance)
+The memory overhead of a graph is approximately:
 
-// Concurrent operations are now safe
-var wg sync.WaitGroup
-numOperations := 10
+ The total memory used by the graph is given by:
 
-// Concurrent searches
-wg.Add(numOperations)
-for i := 0; i < numOperations; i++ {
-    go func(i int) {
-        defer wg.Done()
-        query := []float32{float32(i) * 0.1, float32(i) * 0.1, float32(i) * 0.1}
-        results, _ := g.Search(query, 1)
-        fmt.Printf("Search %d found: %v\n", i, results[0].Key)
-    }(i)
-}
+- `mem_graph = n * log(n) * size(id) * M`
+- `mem_base = n * d * 4`
+- `mem_total = mem_graph + mem_base`
 
-// Concurrent adds
-wg.Add(numOperations)
-for i := 0; i < numOperations; i++ {
-    go func(i int) {
-        defer wg.Done()
-        nodeID := 10 + i
-        vector := []float32{float32(i), float32(i), float32(i)}
-        g.Add(hnsw.MakeNode(nodeID, vector))
-    }(i)
-}
+where:
 
-// Wait for all operations to complete
-wg.Wait()
-```
+- $n$ is the number of vectors
+- $\text{size(key)}$ is the size of the key in bytes
+- $M$ is the maximum number of neighbors per node
+- $d$ is the dimensionality of the vectors
 
-### Batch Operations
+## Benchmarks
 
-For high-throughput scenarios, batch operations can significantly reduce lock contention:
-
-```go
-// Add a batch of nodes in a single operation
-batch := make([]hnsw.Node[int], 5)
-for i := range batch {
-    nodeID := 100 + i
-    vector := []float32{float32(i) * 0.5, float32(i) * 0.5, float32(i) * 0.5}
-    batch[i] = hnsw.MakeNode(nodeID, vector)
-}
-g.BatchAdd(batch)
-
-// Perform multiple searches in a single operation
-queries := [][]float32{
-    {0.1, 0.1, 0.1},
-    {0.2, 0.2, 0.2},
-    {0.3, 0.3, 0.3},
-}
-batchResults, _ := g.BatchSearch(queries, 2)
-
-// Delete multiple nodes in a single operation
-keysToDelete := []int{100, 101, 102}
-deleteResults := g.BatchDelete(keysToDelete)
-for i, key := range keysToDelete {
-    fmt.Printf("Deleted %d: %v\n", key, deleteResults[i])
-}
-```
-
-### Negative Examples
-
-The HNSW implementation now supports searching with negative examples, allowing you to find vectors similar to your query but dissimilar to specified negative examples:
-
-```go
-// Create a graph with some vectors
-g, err := hnsw.NewGraphWithConfig[string](16, 0.25, 20, hnsw.CosineDistance)
-if err != nil {
-    log.Fatalf("failed to create graph: %v", err)
-}
-
-// Add some vectors representing different concepts
-g.Add(
-    hnsw.MakeNode("dog", []float32{1.0, 0.2, 0.1, 0.0}),
-    hnsw.MakeNode("puppy", []float32{0.9, 0.3, 0.2, 0.1}),
-    hnsw.MakeNode("cat", []float32{0.1, 1.0, 0.2, 0.0}),
-    hnsw.MakeNode("kitten", []float32{0.2, 0.9, 0.3, 0.1}),
-    // ... more vectors ...
-)
-
-// Search with a single negative example
-dogQuery := []float32{1.0, 0.2, 0.1, 0.0}      // dog query
-puppyNegative := []float32{0.9, 0.3, 0.2, 0.1} // puppy (negative example)
-
-// Find dog-related concepts but not puppies (negativeWeight = 0.5)
-results, err := g.SearchWithNegative(dogQuery, puppyNegative, 3, 0.5)
-if err != nil {
-    log.Fatalf("failed to search with negative: %v", err)
-}
-
-// Search with multiple negative examples
-petQuery := []float32{0.3, 0.3, 0.3, 0.3}      // general pet query
-dogNegative := []float32{1.0, 0.2, 0.1, 0.0}   // dog (negative example)
-catNegative := []float32{0.1, 1.0, 0.2, 0.0}   // cat (negative example)
-
-negatives := []hnsw.Vector{dogNegative, catNegative}
-
-// Find pet-related concepts but not dogs or cats (negativeWeight = 0.7)
-results, err = g.SearchWithNegatives(petQuery, negatives, 3, 0.7)
-if err != nil {
-    log.Fatalf("failed to search with negatives: %v", err)
-}
-
-// Batch search with negative examples
-queries := []hnsw.Vector{
-    {1.0, 0.2, 0.1, 0.0}, // dog query
-    {0.1, 1.0, 0.2, 0.0}, // cat query
-}
-
-batchNegatives := [][]hnsw.Vector{
-    {
-        {0.9, 0.3, 0.2, 0.1}, // puppy (negative for dog query)
-    },
-    {
-        {0.2, 0.9, 0.3, 0.1}, // kitten (negative for cat query)
-    },
-}
-
-batchResults, err := g.BatchSearchWithNegatives(queries, batchNegatives, 3, 0.5)
-if err != nil {
-    log.Fatalf("failed to batch search with negatives: %v", err)
-}
-```
-
-#### Negative Examples Design
-
-The negative examples feature allows you to find vectors that are similar to your query but dissimilar to specified negative examples:
-
-1. **SearchWithNegative**: Search with a single negative example.
-
-   ```go
-   func (g *Graph[K]) SearchWithNegative(query, negative Vector, k int, negativeWeight float32) ([]Node[K], error)
-   ```
-
-2. **SearchWithNegatives**: Search with multiple negative examples.
-
-   ```go
-   func (g *Graph[K]) SearchWithNegatives(query Vector, negatives []Vector, k int, negativeWeight float32) ([]Node[K], error)
-   ```
-
-3. **BatchSearchWithNegatives**: Perform multiple searches with negative examples in a single operation.
-
-   ```go
-   func (g *Graph[K]) BatchSearchWithNegatives(queries []Vector, negatives [][]Vector, k int, negativeWeight float32) ([][]Node[K], error)
-   ```
-
-4. **Parameters**:
-   * **query**: The query vector to search for.
-   * **negative/negatives**: The negative example vector(s) to avoid.
-   * **k**: The number of results to return.
-   * **negativeWeight**: The weight to apply to negative examples (0.0 to 1.0).
-     * 0.0: Ignore negative examples completely.
-     * 1.0: Strongly avoid negative examples.
-     * Recommended range: 0.3 to 0.7 for balanced results.
-
-5. **Use Cases**:
-   * **Content Filtering**: Find content similar to a query but excluding specific categories.
-   * **Diversity**: Ensure diverse search results by avoiding similar items.
-   * **Preference Learning**: Incorporate user preferences by avoiding disliked items.
-   * **Semantic Search**: Refine search results by excluding irrelevant concepts.
-
-6. **Performance Considerations**:
-   * The search process remains efficient with O(log n) complexity.
-   * The scoring calculation includes additional distance computations for negative examples.
-   * For many negative examples, consider using a smaller negativeWeight to maintain result quality.
-
-7. **Implementation Details**:
-   * Results are scored based on similarity to the query and dissimilarity to negative examples.
-   * The final score is a weighted combination: `score = similarity - (negativeWeight * negativeSimilarity)`.
-   * Results are sorted by this combined score, returning the top k items.
-
-This feature enables more nuanced and refined search capabilities, allowing you to express not just what you're looking for, but also what you want to avoid.
-
-### Benchmark Results
-
-Our benchmarks show the performance characteristics of the thread-safe implementation:
-
-#### Sequential vs. Concurrent Operations
+The library includes comprehensive benchmarks for various operations:
 
 | Operation | Sequential (ns/op) | Concurrent (ns/op) | Notes |
 |-----------|-------------------|-------------------|-------|
@@ -589,117 +319,10 @@ Our benchmarks show the performance characteristics of the thread-safe implement
 | Search    | 32,758            | 16,967            | Concurrent searches are faster due to parallelism |
 | Delete    | 22,131            | 399.1             | Batch deletes are more efficient for large operations |
 
-#### Batch vs. Individual Operations
+## License
 
-| Operation | Batch (ns/op) | Individual (ns/op) | Notes |
-|-----------|--------------|-------------------|-------|
-| Add       | 18,291,067    | 18,134,883        | Comparable performance for large batches |
-| Search    | 2,923,725     | 3,036,183         | Batch searches are slightly faster |
-| Delete    | 22,131        | 399.1             | Batch deletes are more efficient for large operations |
+This project is licensed under CC0 1.0 Universal.
 
-#### ParallelSearch Performance
+## Acknowledgments
 
-| Graph Size | Dimensions | Sequential (ns/op) | Parallel (ns/op) | Speedup |
-|------------|-----------|-------------------|-----------------|---------|
-| 100        | 128       | 19,617            | 17,967          | 1.09x   |
-| 100        | 1536      | 122,608           | 111,925         | 1.10x   |
-| 1000       | 128       | 28,467            | 28,267          | 1.01x   |
-| 1000       | 1536      | 151,142           | 167,167         | 0.90x   |
-| 10000      | 128       | 50,917            | 32,700          | 1.56x   |
-| 10000      | 1536      | 273,525           | 287,167         | 0.95x   |
-| 50000      | 1536      | 389,075           | 449,775         | 0.87x   |
-
-These results show that:
-
-1. **Concurrent Search**: Provides significant speedup for medium-sized graphs with moderate dimensions.
-2. **Batch Operations**: Offer slight performance improvements and reduce lock contention.
-3. **ParallelSearch**: Most effective for medium to large graphs with moderate dimensions.
-
-### Thread Safety Design
-
-The thread-safe implementation uses a read-write mutex pattern to allow multiple concurrent reads (searches) but exclusive writes (adds/deletes):
-
-1. **Read-Write Lock**: The `Graph` struct contains a `sync.RWMutex` to protect shared data structures.
-
-   ```go
-   type Graph[K cmp.Ordered] struct {
-       // ... other fields ...
-       mu sync.RWMutex
-       // ... other fields ...
-   }
-   ```
-
-2. **Lock Usage**:
-   * Read operations (`Search`, `Lookup`, `Dims`) use read locks (`RLock`/`RUnlock`)
-   * Write operations (`Add`, `Delete`) use write locks (`Lock`/`Unlock`)
-   * Batch operations (`BatchAdd`, `BatchSearch`, `BatchDelete`) use a single lock acquisition for multiple operations
-
-3. **Deadlock Prevention**: Methods called from within locked methods (like `Len` and `Dims` when called from `Add`) avoid acquiring locks again to prevent deadlocks.
-
-4. **Performance Considerations**:
-   * Read locks allow multiple concurrent searches
-   * Write locks ensure data consistency during modifications
-   * Batch operations reduce lock contention for high-throughput scenarios
-
-5. **Concurrency Patterns**:
-   * For read-heavy workloads, the implementation performs well with minimal overhead
-   * For write-heavy workloads, consider using batch operations to reduce lock contention
-   * For mixed workloads, the implementation provides a good balance of safety and performance
-
-This design ensures that the HNSW graph can be safely used in concurrent environments while maintaining reasonable performance characteristics.
-
-### Batch Operations Design
-
-Batch operations are designed to optimize performance for high-throughput scenarios by reducing lock contention:
-
-1. **BatchAdd**: Adds multiple nodes in a single operation with a single lock acquisition.
-
-   ```go
-   func (g *Graph[K]) BatchAdd(nodes []Node[K]) error {
-       g.mu.Lock()
-       defer g.mu.Unlock()
-       
-       // Process all nodes in a batch...
-   }
-   ```
-
-2. **BatchSearch**: Performs multiple searches in a single operation with a single lock acquisition.
-
-   ```go
-   func (g *Graph[K]) BatchSearch(queries []Vector, k int) ([][]Node[K], error) {
-       g.mu.RLock()
-       defer g.mu.RUnlock()
-       
-       // Process all queries in a batch...
-   }
-   ```
-
-3. **BatchDelete**: Removes multiple nodes in a single operation with a single lock acquisition, returning a slice of booleans indicating success for each key.
-
-   ```go
-   func (g *Graph[K]) BatchDelete(keys []K) []bool {
-       g.mu.Lock()
-       defer g.mu.Unlock()
-       
-       // Process all deletions in a batch...
-       // Return a slice of booleans indicating which keys were successfully deleted
-   }
-   ```
-
-4. **Performance Benefits**:
-   * **Reduced Lock Contention**: Acquiring the lock once for multiple operations reduces contention.
-   * **Amortized Overhead**: The overhead of lock acquisition is amortized over multiple operations.
-   * **Improved Throughput**: For high-throughput scenarios, batch operations can significantly improve performance.
-
-5. **Use Cases**:
-   * **Bulk Loading**: When loading a large number of vectors into the graph.
-   * **Batch Processing**: When processing a batch of queries from a queue.
-   * **High-Throughput APIs**: When serving a high volume of requests.
-   * **Bulk Deletion**: When removing multiple vectors from the graph at once.
-
-6. **Limitations**:
-   * **Memory Usage**: Batch operations may require more memory to store intermediate results.
-   * **Latency**: Individual operations within a batch may experience higher latency due to processing order.
-   * **Error Handling**: An error in one operation may affect the entire batch.
-
-Batch operations are particularly useful in scenarios where you need to process a large number of operations efficiently, such as bulk loading or high-throughput APIs.
+This library is a fork of the original implementation by [Coder](https://github.com/coder/hnsw). We've extended it with additional features, optimizations, and extensions while maintaining compatibility with the original API.
