@@ -17,6 +17,10 @@ This library can be used as an in-memory alternative to vector databases (e.g., 
 
 The library also includes extensions for metadata storage, faceted search, and other advanced features.
 
+## Hybrid Strategy
+
+We introduce a hybrid strategy in this library that combines multiple search techniques, including Hierarchical Navigable Small World (HNSW) graphs, exact search, and Locality-Sensitive Hashing (LSH), to optimize performance across diverse scenarios. This approach dynamically selects the most suitable method based on dataset characteristics, ensuring efficient and accurate approximate nearest neighbor search even in challenging conditions such as high-dimensional data and varying dataset sizes. By leveraging the strengths of each technique, the hybrid strategy provides a solution for applications requiring high performance and adaptability.
+
 ## Installation
 
 ```text
