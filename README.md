@@ -246,43 +246,6 @@ results, err := facetedGraph.Search(
 )
 ```
 
-### Arrow Extension
-
-Integrate with Apache Arrow for efficient vector storage and interoperability:
-
-```go
-// Create an Arrow-backed graph
-dimensions := 128
-graph := arrow.NewArrowGraph[int](dimensions)
-
-// Create an Arrow vector
-values := []float32{0.1, 0.2, 0.3, /* ... more values ... */}
-vector := arrow.CreateArrowVector(values)
-
-// Add a vector to the graph
-err := graph.Add(1, vector)
-if err != nil {
-    log.Fatalf("Failed to add vector: %v", err)
-}
-
-// Search for similar vectors
-query := arrow.CreateArrowVector([]float32{0.15, 0.25, 0.35, /* ... more values ... */})
-results, err := graph.Search(query, 5)
-if err != nil {
-    log.Fatalf("Search failed: %v", err)
-}
-
-// Batch operations with Arrow vectors
-ids := []int{2, 3, 4}
-vectors := [][]float32{
-    {0.2, 0.3, 0.4, /* ... more values ... */},
-    {0.3, 0.4, 0.5, /* ... more values ... */},
-    {0.4, 0.5, 0.6, /* ... more values ... */},
-}
-batchVectors := arrow.CreateArrowVectorBatch(vectors)
-err = graph.BatchAdd(ids, batchVectors)
-```
-
 ## Performance Considerations
 
 For optimal performance:
