@@ -1,0 +1,71 @@
+/* Custom styles for HNSW documentation */
+
+:root {
+  --md-primary-fg-color: #3F51B5;
+  --md-primary-fg-color--light: #7986CB;
+  --md-primary-fg-color--dark: #303F9F;
+  --md-accent-fg-color: #FF4081;
+}
+
+/* Improve code block readability */
+.md-typeset code {
+  font-size: 0.9em;
+}
+
+.md-typeset pre > code {
+  padding: 1em;
+}
+
+/* Enhance table styling */
+.md-typeset table:not([class]) {
+  font-size: 0.9em;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--md-primary-fg-color--light);
+  color: white;
+}
+
+/* Improve admonition styling */
+.md-typeset .admonition {
+  font-size: 0.9em;
+}
+
+/* Custom styling for API reference */
+.api-method {
+  padding: 1em;
+  margin-bottom: 1em;
+  border-left: 4px solid var(--md-primary-fg-color);
+  background-color: rgba(63, 81, 181, 0.05);
+}
+
+.api-method h3 {
+  margin-top: 0;
+  color: var(--md-primary-fg-color);
+}
+
+/* Improve navigation */
+.md-nav__link:focus, 
+.md-nav__link:hover {
+  color: var(--md-accent-fg-color);
+}
+
+/* Custom footer styling */
+.md-footer-meta {
+  background-color: #1a1a1a;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 76.1875em) {
+  .md-nav--primary .md-nav__title {
+    background-color: var(--md-primary-fg-color);
+  }
+}
+
+/* Print styles */
+@media print {
+  .md-typeset a {
+    color: #000000;
+    text-decoration: underline;
+  }
+} 
