@@ -3,6 +3,8 @@
 [![GoDoc](https://godoc.org/github.com/golang/gddo?status.svg)](https://pkg.go.dev/github.com/coder/hnsw@main?utm_source=godoc)
 ![Go workflow status](https://github.com/coder/hnsw/actions/workflows/go.yaml/badge.svg)
 
+Please note this is a fork of the core implementation at github.com/coder/hnsw.
+
 Package `hnsw` implements Hierarchical Navigable Small World graphs in Go. You
 can read up about how they work [here](https://www.pinecone.io/learn/series/faiss/hnsw/). In essence,
 they allow for fast approximate nearest neighbor searches with high-dimensional
