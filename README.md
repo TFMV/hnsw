@@ -6,8 +6,6 @@
 
 Package `hnsw` implements Hierarchical Navigable Small World graphs in Go, providing an efficient solution for approximate nearest neighbor search in high-dimensional vector spaces. HNSW graphs enable fast similarity search operations with logarithmic complexity, making them ideal for applications like semantic search, recommendation systems, and image similarity.
 
-This library can be used as an in-memory alternative to vector databases (e.g., Pinecone, Weaviate), implementing essential vector operations with high performance:
-
 | Operation | Complexity            | Description                                  |
 | --------- | --------------------- | -------------------------------------------- |
 | Insert    | $O(log(n))$           | Insert a vector into the graph               |
@@ -20,6 +18,10 @@ The library also includes extensions for metadata storage, faceted search, and o
 ## Hybrid Strategy
 
 We introduce a hybrid strategy in this library that combines multiple search techniques, including Hierarchical Navigable Small World (HNSW) graphs, exact search, and Locality-Sensitive Hashing (LSH), to optimize performance across diverse scenarios. This approach dynamically selects the most suitable method based on dataset characteristics, ensuring efficient and accurate approximate nearest neighbor search even in challenging conditions such as high-dimensional data and varying dataset sizes. By leveraging the strengths of each technique, the hybrid strategy provides a solution for applications requiring high performance and adaptability.
+
+## Full Implementation
+
+To see the library fully exercised, see [Quiver](https://github.com/TFMV/quiver)
 
 ## Installation
 
@@ -250,6 +252,119 @@ results, err := facetedGraph.Search(
 )
 ```
 
+### Hybrid Extension
+
+The hybrid extension combines multiple search techniques to optimize performance across diverse scenarios:
+
+```go
+// Create a hybrid index configuration
+config := hybrid.DefaultIndexConfig()
+config.Type = hybrid.HybridIndexType
+config.ExactThreshold = 1000 // Use exact search for datasets smaller than 1000 vectors
+config.M = 16                // HNSW parameter for maximum connections per node
+config.EfSearch = 100        // HNSW parameter for search accuracy
+
+// Create a hybrid index
+hybridIndex, err := hybrid.NewHybridIndex[string](config)
+if err != nil {
+    log.Fatalf("Failed to create hybrid index: %v", err)
+}
+
+// Add vectors
+for i := 0; i < 10000; i++ {
+    vector := make([]float32, 128)
+    for j := range vector {
+        vector[j] = rand.Float32()
+    }
+    hybridIndex.Add(fmt.Sprintf("doc%d", i), vector)
+}
+
+// Search - the hybrid index will automatically select the best strategy
+query := make([]float32, 128)
+for i := range query {
+    query[i] = rand.Float32()
+}
+results, distances, err := hybridIndex.Search(query, 10)
+```
+
+#### Key Features
+
+- **Adaptive Strategy Selection**: Automatically chooses between HNSW, exact search, and LSH based on dataset size, dimensionality, and query patterns
+- **Learning from Queries**: Improves performance over time by analyzing query patterns and results
+- **Strategy Composition**: Combines multiple strategies for better results (e.g., using LSH to pre-filter candidates before HNSW search)
+- **Configurable Thresholds**: Fine-tune when to use each strategy based on your specific needs
+
+### Parquet Extension
+
+The Parquet extension implements hnsw support in parquet.
+
+```go
+// Create a Parquet storage configuration
+storageConfig := parquet.DefaultParquetStorageConfig()
+storageConfig.Directory = "my_vectors"
+storageConfig.Compression = compress.Codecs.Snappy
+storageConfig.BatchSize = 128 * 1024 * 1024 // 128MB batch size
+
+// Create a Parquet storage instance
+storage, err := parquet.NewParquetStorage[string](storageConfig)
+if err != nil {
+    log.Fatalf("Failed to create Parquet storage: %v", err)
+}
+defer storage.Close()
+
+// Store vectors
+vectors := map[string][]float32{
+    "doc1": {0.1, 0.2, 0.3},
+    "doc2": {0.2, 0.3, 0.4},
+    "doc3": {0.3, 0.4, 0.5},
+}
+if err := storage.StoreVectors(vectors); err != nil {
+    log.Fatalf("Failed to store vectors: %v", err)
+}
+
+// Load vectors
+loadedVectors, err := storage.LoadVectors()
+if err != nil {
+    log.Fatalf("Failed to load vectors: %v", err)
+}
+
+// Create a ParquetGraph that combines HNSW with Parquet storage
+pgConfig := parquet.ParquetGraphConfig{
+    M:        16,
+    Ml:       0.4,
+    EfSearch: 100,
+    Distance: hnsw.CosineDistance,
+    Storage:  storageConfig,
+}
+pg, err := parquet.NewParquetGraph[string](pgConfig)
+if err != nil {
+    log.Fatalf("Failed to create ParquetGraph: %v", err)
+}
+defer pg.Close()
+
+// Add vectors to the ParquetGraph
+for key, vector := range vectors {
+    if err := pg.Add(key, vector); err != nil {
+        log.Fatalf("Failed to add vector: %v", err)
+    }
+}
+
+// Search with the ParquetGraph
+query := []float32{0.2, 0.3, 0.4}
+results, err := pg.Search(query, 5)
+if err != nil {
+    log.Fatalf("Failed to search: %v", err)
+}
+```
+
+#### Key Features
+
+- **Columnar Storage**: Efficient storage and retrieval of vectors with Apache Parquet
+- **Memory Mapping**: Fast access to vectors without loading the entire dataset into memory
+- **Compression**: Reduces storage requirements with configurable compression codecs
+- **Batch Processing**: Optimized for reading and writing vectors in batches
+- **Schema Evolution**: Supports changes to your data structure over time
+
 ## Performance Considerations
 
 For optimal performance:
@@ -276,20 +391,6 @@ where:
 - $M$ is the maximum number of neighbors per node
 - $d$ is the dimensionality of the vectors
 
-## Benchmarks
-
-The library includes comprehensive benchmarks for various operations:
-
-| Operation | Sequential (ns/op) | Concurrent (ns/op) | Notes |
-|-----------|-------------------|-------------------|-------|
-| Add       | 4,967             | 9,425             | Concurrent adds are slower due to lock contention |
-| Search    | 32,758            | 16,967            | Concurrent searches are faster due to parallelism |
-| Delete    | 22,131            | 399.1             | Batch deletes are more efficient for large operations |
-
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-## Acknowledgments
-
-This library is a fork of the original implementation by [Coder](https://github.com/coder/hnsw). We've extended it with additional features, optimizations, and extensions while maintaining compatibility with the original API.
