@@ -288,7 +288,7 @@ The library includes comprehensive benchmarks for various operations:
 
 ## License
 
-This project is licensed under CC0 1.0 Universal.
+This project is licensed under the [MIT License](LICENSE).
 
 ## Acknowledgments
 
