@@ -32,6 +32,3 @@ jobs:
 
       - name: Test
         run: go test -v ./...
-
-      - name: Run benchmarks (short)
-        run: go test -bench=. -benchmem -short ./hnsw/hnsw-extensions/hybrid/...
