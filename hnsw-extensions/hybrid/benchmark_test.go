@@ -581,3 +581,402 @@ func BenchmarkDimensionalityImpact(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkAdaptiveHybridIndex benchmarks the adaptive hybrid index
+func BenchmarkAdaptiveHybridIndex(b *testing.B) {
+	// Define benchmark configurations
+	benchmarkConfigs := []BenchmarkConfig{
+		// Small dataset
+		{NumVectors: 1000, Dimension: 128, QueryCount: 100, K: 10, DatasetType: "random"},
+		// Medium dataset
+		{NumVectors: 10000, Dimension: 128, QueryCount: 100, K: 10, DatasetType: "random"},
+		// High-dimensional dataset
+		{NumVectors: 10000, Dimension: 512, QueryCount: 100, K: 10, DatasetType: "random"},
+		// Clustered dataset
+		{NumVectors: 10000, Dimension: 128, QueryCount: 100, K: 10, DatasetType: "clustered", ClusterCount: 10, ClusterRadius: 0.1},
+	}
+
+	for _, config := range benchmarkConfigs {
+		// Generate dataset and queries
+		vectors, queries := generateBenchmarkData(config)
+
+		benchName := fmt.Sprintf("Adaptive/%d/%d/%s", config.NumVectors, config.Dimension, config.DatasetType)
+		b.Run(benchName, func(b *testing.B) {
+			// Create distance function
+			distFunc := hnsw.CosineDistance
+
+			// Create underlying indexes
+			exactIndex := NewExactIndex[int](distFunc)
+
+			// Create HNSW graph
+			hnswGraph, err := hnsw.NewGraphWithConfig[int](16, 0.25, 20, distFunc)
+			if err != nil {
+				b.Fatalf("Failed to create HNSW graph: %v", err)
+			}
+
+			// Create LSH index
+			lshIndex := NewLSHIndex[int](4, 8, distFunc)
+
+			// Create adaptive config
+			adaptiveConfig := DefaultAdaptiveConfig()
+			adaptiveConfig.InitialExactThreshold = 1000
+			adaptiveConfig.InitialDimThreshold = 100
+			adaptiveConfig.ExplorationFactor = 0.1
+
+			// Create adaptive hybrid index
+			adaptiveIndex := NewAdaptiveHybridIndex(
+				exactIndex,
+				hnswGraph,
+				lshIndex,
+				distFunc,
+				adaptiveConfig,
+			)
+
+			// Add vectors to index
+			for i, vector := range vectors {
+				if err := adaptiveIndex.Add(i, vector); err != nil {
+					b.Fatalf("Failed to add vector: %v", err)
+				}
+			}
+
+			// Reset timer before search benchmark
+			b.ResetTimer()
+
+			// Run benchmark
+			for i := 0; i < b.N; i++ {
+				queryIdx := i % len(queries)
+				query := queries[queryIdx]
+
+				_, _, err := adaptiveIndex.Search(query, config.K)
+				if err != nil {
+					b.Fatalf("Search failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkAdaptiveStrategySelection benchmarks the strategy selection in the adaptive hybrid index
+func BenchmarkAdaptiveStrategySelection(b *testing.B) {
+	config := DefaultBenchmarkConfig()
+	vectors, queries := generateBenchmarkData(config)
+
+	// Create distance function
+	distFunc := hnsw.CosineDistance
+
+	// Create underlying indexes
+	exactIndex := NewExactIndex[int](distFunc)
+
+	// Create HNSW graph
+	hnswGraph, err := hnsw.NewGraphWithConfig[int](16, 0.25, 20, distFunc)
+	if err != nil {
+		b.Fatalf("Failed to create HNSW graph: %v", err)
+	}
+
+	// Create LSH index
+	lshIndex := NewLSHIndex[int](4, 8, distFunc)
+
+	// Create adaptive config
+	adaptiveConfig := DefaultAdaptiveConfig()
+	adaptiveConfig.InitialExactThreshold = 1000
+	adaptiveConfig.InitialDimThreshold = 100
+	adaptiveConfig.ExplorationFactor = 0.1
+
+	// Create adaptive hybrid index
+	adaptiveIndex := NewAdaptiveHybridIndex(
+		exactIndex,
+		hnswGraph,
+		lshIndex,
+		distFunc,
+		adaptiveConfig,
+	)
+
+	// Add vectors to index
+	for i, vector := range vectors {
+		if err := adaptiveIndex.Add(i, vector); err != nil {
+			b.Fatalf("Failed to add vector: %v", err)
+		}
+	}
+
+	// Warm up the index with some queries to gather statistics
+	for i := 0; i < 50; i++ {
+		_, _, err := adaptiveIndex.Search(queries[i], config.K)
+		if err != nil {
+			b.Fatalf("Search failed during warm-up: %v", err)
+		}
+	}
+
+	// Benchmark different query patterns
+	queryPatterns := []struct {
+		name     string
+		getQuery func(i int) []float32
+	}{
+		{
+			name: "Random",
+			getQuery: func(i int) []float32 {
+				return queries[i%len(queries)]
+			},
+		},
+		{
+			name: "Clustered",
+			getQuery: func(i int) []float32 {
+				// Use a small set of queries repeatedly to create a clustered pattern
+				baseIdx := i % 5
+				query := make([]float32, len(queries[baseIdx]))
+				copy(query, queries[baseIdx])
+				// Add small random variations
+				for j := range query {
+					query[j] += (rand.Float32() * 0.05)
+				}
+				normalizeVector(query)
+				return query
+			},
+		},
+		{
+			name: "HighDimensional",
+			getQuery: func(i int) []float32 {
+				// Create a higher dimensional query and then truncate
+				highDimQuery := generateRandomVectors(1, config.Dimension*2)[0]
+				return highDimQuery[:config.Dimension]
+			},
+		},
+	}
+
+	for _, pattern := range queryPatterns {
+		b.Run(fmt.Sprintf("Strategy/%s", pattern.name), func(b *testing.B) {
+			// Reset stats before each pattern
+			adaptiveIndex.ResetStats()
+
+			b.ResetTimer()
+
+			// Run benchmark
+			for i := 0; i < b.N; i++ {
+				query := pattern.getQuery(i)
+				_, _, err := adaptiveIndex.Search(query, config.K)
+				if err != nil {
+					b.Fatalf("Search failed: %v", err)
+				}
+			}
+
+			b.StopTimer()
+
+			// Log the strategy statistics
+			stats := adaptiveIndex.GetStats()
+			if strategies, ok := stats["strategies"].(map[string]interface{}); ok {
+				for strategy, stratStats := range strategies {
+					if ss, ok := stratStats.(map[string]interface{}); ok {
+						if totalQueries, ok := ss["total_queries"].(int); ok && totalQueries > 0 {
+							b.Logf("Strategy %s: %d queries (%.2f%%)",
+								strategy,
+								totalQueries,
+								float64(totalQueries)*100/float64(b.N))
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkAdaptiveVsStatic compares the adaptive hybrid index with static index types
+func BenchmarkAdaptiveVsStatic(b *testing.B) {
+	benchmarkConfigs := []BenchmarkConfig{
+		// Mixed dataset with different characteristics
+		{NumVectors: 10000, Dimension: 128, QueryCount: 300, K: 10, DatasetType: "random"},
+	}
+
+	for _, config := range benchmarkConfigs {
+		// Generate dataset
+		vectors, _ := generateBenchmarkData(config)
+
+		// Generate different types of queries
+		randomQueries := generateRandomVectors(config.QueryCount/3, config.Dimension)
+		clusteredQueries := generateClusteredVectors(config.QueryCount/3, config.Dimension, 5, 0.1)
+		highDimQueries := generateRandomVectors(config.QueryCount/3, config.Dimension*2)
+
+		// Combine queries
+		mixedQueries := make([][]float32, 0, config.QueryCount)
+		mixedQueries = append(mixedQueries, randomQueries...)
+		mixedQueries = append(mixedQueries, clusteredQueries...)
+
+		// Truncate high-dimensional queries to match dimension
+		for _, q := range highDimQueries {
+			mixedQueries = append(mixedQueries, q[:config.Dimension])
+		}
+
+		// Shuffle queries
+		rand.Shuffle(len(mixedQueries), func(i, j int) {
+			mixedQueries[i], mixedQueries[j] = mixedQueries[j], mixedQueries[i]
+		})
+
+		// Create distance function
+		distFunc := hnsw.CosineDistance
+
+		// Benchmark different index types
+		indexTypes := []struct {
+			name  string
+			setup func() (func(query []float32, k int) error, func())
+		}{
+			{
+				name: "Exact",
+				setup: func() (func(query []float32, k int) error, func()) {
+					indexConfig := DefaultIndexConfig()
+					indexConfig.Type = ExactIndexType
+					index, err := NewHybridIndex[int](indexConfig)
+					if err != nil {
+						b.Fatalf("Failed to create exact index: %v", err)
+					}
+
+					for i, vector := range vectors {
+						if err := index.Add(i, vector); err != nil {
+							b.Fatalf("Failed to add vector: %v", err)
+						}
+					}
+
+					search := func(query []float32, k int) error {
+						_, err := index.Search(query, k)
+						return err
+					}
+
+					cleanup := func() {
+						index.Close()
+					}
+
+					return search, cleanup
+				},
+			},
+			{
+				name: "HNSW",
+				setup: func() (func(query []float32, k int) error, func()) {
+					indexConfig := DefaultIndexConfig()
+					indexConfig.Type = HNSWIndexType
+					index, err := NewHybridIndex[int](indexConfig)
+					if err != nil {
+						b.Fatalf("Failed to create HNSW index: %v", err)
+					}
+
+					for i, vector := range vectors {
+						if err := index.Add(i, vector); err != nil {
+							b.Fatalf("Failed to add vector: %v", err)
+						}
+					}
+
+					search := func(query []float32, k int) error {
+						_, err := index.Search(query, k)
+						return err
+					}
+
+					cleanup := func() {
+						index.Close()
+					}
+
+					return search, cleanup
+				},
+			},
+			{
+				name: "LSH",
+				setup: func() (func(query []float32, k int) error, func()) {
+					indexConfig := DefaultIndexConfig()
+					indexConfig.Type = LSHIndexType
+					index, err := NewHybridIndex[int](indexConfig)
+					if err != nil {
+						b.Fatalf("Failed to create LSH index: %v", err)
+					}
+
+					for i, vector := range vectors {
+						if err := index.Add(i, vector); err != nil {
+							b.Fatalf("Failed to add vector: %v", err)
+						}
+					}
+
+					search := func(query []float32, k int) error {
+						_, err := index.Search(query, k)
+						return err
+					}
+
+					cleanup := func() {
+						index.Close()
+					}
+
+					return search, cleanup
+				},
+			},
+			{
+				name: "Adaptive",
+				setup: func() (func(query []float32, k int) error, func()) {
+					// Create underlying indexes
+					exactIndex := NewExactIndex[int](distFunc)
+
+					// Create HNSW graph
+					hnswGraph, err := hnsw.NewGraphWithConfig[int](16, 0.25, 20, distFunc)
+					if err != nil {
+						b.Fatalf("Failed to create HNSW graph: %v", err)
+					}
+
+					// Create LSH index
+					lshIndex := NewLSHIndex[int](4, 8, distFunc)
+
+					// Create adaptive config
+					adaptiveConfig := DefaultAdaptiveConfig()
+					adaptiveConfig.InitialExactThreshold = 1000
+					adaptiveConfig.InitialDimThreshold = 100
+					adaptiveConfig.ExplorationFactor = 0.1
+
+					// Create adaptive hybrid index
+					adaptiveIndex := NewAdaptiveHybridIndex(
+						exactIndex,
+						hnswGraph,
+						lshIndex,
+						distFunc,
+						adaptiveConfig,
+					)
+
+					// Add vectors to index
+					for i, vector := range vectors {
+						if err := adaptiveIndex.Add(i, vector); err != nil {
+							b.Fatalf("Failed to add vector: %v", err)
+						}
+					}
+
+					// Warm up with some queries
+					for i := 0; i < 50; i++ {
+						_, _, err := adaptiveIndex.Search(mixedQueries[i], config.K)
+						if err != nil {
+							b.Fatalf("Search failed during warm-up: %v", err)
+						}
+					}
+
+					search := func(query []float32, k int) error {
+						_, _, err := adaptiveIndex.Search(query, k)
+						return err
+					}
+
+					cleanup := func() {
+						// No cleanup needed
+					}
+
+					return search, cleanup
+				},
+			},
+		}
+
+		for _, idxType := range indexTypes {
+			b.Run(fmt.Sprintf("Compare/%s/MixedQueries", idxType.name), func(b *testing.B) {
+				search, cleanup := idxType.setup()
+				defer cleanup()
+
+				b.ResetTimer()
+
+				// Run benchmark
+				for i := 0; i < b.N; i++ {
+					queryIdx := i % len(mixedQueries)
+					query := mixedQueries[queryIdx]
+
+					if err := search(query, config.K); err != nil {
+						b.Fatalf("Search failed: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
