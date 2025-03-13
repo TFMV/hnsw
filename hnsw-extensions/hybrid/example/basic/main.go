@@ -10,8 +10,8 @@ import (
 )
 
 func main() {
-	// Set random seed for reproducibility
-	rand.Seed(time.Now().UnixNano())
+	// Initialize random number generator
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Create a hybrid index with default configuration
 	config := hybrid.DefaultIndexConfig()
@@ -26,7 +26,7 @@ func main() {
 	// Generate some random vectors
 	numVectors := 1000
 	dimension := 128
-	vectors := generateRandomVectors(numVectors, dimension)
+	vectors := generateRandomVectors(rng, numVectors, dimension)
 
 	// Add vectors to the index
 	fmt.Println("Adding vectors to the index...")
@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// Generate a random query vector
-	queryVector := generateRandomVector(dimension)
+	queryVector := generateRandomVector(rng, dimension)
 
 	// Search for nearest neighbors
 	fmt.Println("Searching for nearest neighbors...")
@@ -99,23 +99,23 @@ func main() {
 	}
 }
 
-// generateRandomVectors generates a slice of random vectors.
-func generateRandomVectors(count, dimension int) [][]float32 {
+// generateRandomVectors generates a set of random vectors.
+func generateRandomVectors(rng *rand.Rand, count, dimension int) [][]float32 {
 	vectors := make([][]float32, count)
 	for i := range vectors {
-		vectors[i] = generateRandomVector(dimension)
+		vectors[i] = generateRandomVector(rng, dimension)
 	}
 	return vectors
 }
 
 // generateRandomVector generates a random unit vector.
-func generateRandomVector(dimension int) []float32 {
+func generateRandomVector(rng *rand.Rand, dimension int) []float32 {
 	vector := make([]float32, dimension)
 	var sum float32
 
 	// Generate random components
 	for i := range vector {
-		vector[i] = rand.Float32()*2 - 1
+		vector[i] = rng.Float32()*2 - 1
 		sum += vector[i] * vector[i]
 	}
 

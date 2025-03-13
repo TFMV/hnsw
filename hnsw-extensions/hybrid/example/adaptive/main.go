@@ -19,8 +19,10 @@ const (
 )
 
 func main() {
-	// Seed random number generator
-	rand.Seed(time.Now().UnixNano())
+	fmt.Println("Adaptive Hybrid Index Example")
+
+	// Initialize random number generator
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Create distance function
 	distFunc := hnsw.CosineDistance
@@ -120,7 +122,7 @@ func main() {
 		copy(query, baseVector)
 		// Add small random variations
 		for j := range query {
-			query[j] += rand.Float32() * 0.1
+			query[j] += rng.Float32() * 0.1
 		}
 
 		keys, _, err := adaptiveIndex.Search(query, k)
@@ -154,6 +156,7 @@ func main() {
 
 // generateRandomVectorForAdaptive creates a random unit vector
 func generateRandomVectorForAdaptive(dimensions int) []float32 {
+	// Use the global random source
 	vector := make([]float32, dimensions)
 
 	// Generate random components

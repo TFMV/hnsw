@@ -43,12 +43,12 @@ func TestAdaptiveHybridIndex(t *testing.T) {
 	)
 
 	// Generate random vectors
-	rand.Seed(42) // For reproducibility
+	r := rand.New(rand.NewSource(42)) // For reproducibility
 	vectors := make([][]float32, numVectors)
 	for i := range vectors {
 		vectors[i] = make([]float32, dimension)
 		for j := range vectors[i] {
-			vectors[i][j] = rand.Float32()*2 - 1
+			vectors[i][j] = r.Float32()*2 - 1
 		}
 		// Normalize
 		var sum float32
@@ -135,12 +135,12 @@ func TestAdaptiveStrategySelection(t *testing.T) {
 	)
 
 	// Generate random vectors
-	rand.Seed(42) // For reproducibility
+	r := rand.New(rand.NewSource(42)) // For reproducibility
 	vectors := make([][]float32, numVectors)
 	for i := range vectors {
 		vectors[i] = make([]float32, dimension)
 		for j := range vectors[i] {
-			vectors[i][j] = rand.Float32()*2 - 1
+			vectors[i][j] = r.Float32()*2 - 1
 		}
 		// Normalize
 		var sum float32
@@ -173,7 +173,7 @@ func TestAdaptiveStrategySelection(t *testing.T) {
 	// Test strategy selection for high-dimensional data
 	highDimQuery := make([]float32, 200) // Higher than dimThreshold
 	for i := range highDimQuery {
-		highDimQuery[i] = rand.Float32()*2 - 1
+		highDimQuery[i] = r.Float32()*2 - 1
 	}
 	// Normalize
 	var sum float32
@@ -266,12 +266,12 @@ func TestAdaptiveHybridWithDifferentDatasets(t *testing.T) {
 			)
 
 			// Generate random vectors
-			rand.Seed(time.Now().UnixNano())
+			r := rand.New(rand.NewSource(time.Now().UnixNano()))
 			vectors := make([][]float32, size)
 			for i := range vectors {
 				vectors[i] = make([]float32, dimension)
 				for j := range vectors[i] {
-					vectors[i][j] = rand.Float32()*2 - 1
+					vectors[i][j] = r.Float32()*2 - 1
 				}
 				// Normalize
 				var sum float32

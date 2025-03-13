@@ -93,6 +93,9 @@ type MetadataStore[K cmp.Ordered] interface {
 
 	// BatchDelete removes metadata for multiple keys.
 	BatchDelete(keys []K) []bool
+
+	// ForEach iterates over all metadata entries and calls the provided function for each entry.
+	ForEach(fn func(key K, metadata json.RawMessage))
 }
 
 // MemoryMetadataStore is an in-memory implementation of MetadataStore.
@@ -160,6 +163,13 @@ func (s *MemoryMetadataStore[K]) BatchDelete(keys []K) []bool {
 		}
 	}
 	return result
+}
+
+// ForEach iterates over all metadata entries and calls the provided function for each entry.
+func (s *MemoryMetadataStore[K]) ForEach(fn func(key K, metadata json.RawMessage)) {
+	for key, metadata := range s.metadata {
+		fn(key, metadata)
+	}
 }
 
 // MetadataError represents an error related to metadata operations.

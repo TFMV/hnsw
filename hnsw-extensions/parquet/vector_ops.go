@@ -539,11 +539,12 @@ func (vs *VectorStore[K]) DeleteVector(key K) error {
 	return err
 }
 
-// writeVectorsToFile writes all vectors to the Parquet file
-func (vs *VectorStore[K]) writeVectorsToFile(vectors map[K][]float32) error {
+// WriteVectorsToFile writes all vectors to the Parquet file.
+// It handles creating the schema, building the record batch, and writing to disk.
+func (vs *VectorStore[K]) WriteVectorsToFile(vectors map[K][]float32) error {
 	if len(vectors) == 0 {
 		// If no vectors, create an empty file
-		return vs.createEmptyFile()
+		return vs.CreateEmptyFile()
 	}
 
 	// Create schema
@@ -609,8 +610,9 @@ func (vs *VectorStore[K]) writeVectorsToFile(vectors map[K][]float32) error {
 	return nil
 }
 
-// createEmptyFile creates an empty Parquet file
-func (vs *VectorStore[K]) createEmptyFile() error {
+// CreateEmptyFile creates an empty Parquet file with the appropriate schema.
+// This is useful when initializing a new vector store without any vectors.
+func (vs *VectorStore[K]) CreateEmptyFile() error {
 	// Create schema
 	schema := arrow.NewSchema(
 		[]arrow.Field{

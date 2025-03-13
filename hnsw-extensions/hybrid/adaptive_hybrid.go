@@ -2,6 +2,7 @@ package hybrid
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -315,7 +316,7 @@ func (idx *AdaptiveHybridIndex[K]) Delete(key K) error {
 		for _, err := range errs {
 			errMsg += " " + err.Error()
 		}
-		return fmt.Errorf(errMsg)
+		return errors.New(errMsg)
 	}
 
 	idx.vectorCount--
