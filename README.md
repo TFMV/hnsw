@@ -53,6 +53,81 @@ if err != nil {
 fmt.Printf("best match: %v\n", neighbors[0].Value)
 ```
 
+## Advanced Distance Calculations
+
+The library provides a flexible and type-safe approach to distance calculations through the `vectortypes` package. This allows you to create custom distance functions that work with any type of data.
+
+### Using VectorDistance with Custom Types
+
+```go
+// Define a custom type
+type Document struct {
+    ID        string
+    Embedding []float32
+    Category  string
+}
+
+// Create a custom distance function
+documentDistance := hnsw.NewVectorDistance(
+    vectortypes.ContraMap[vectortypes.F32, Document]{
+        Surface: vectortypes.CreateSurface(hnsw.ToVectorTypesDistanceFunc(hnsw.CosineDistance)),
+        ContraMap: func(doc Document) vectortypes.F32 {
+            return doc.Embedding
+        },
+    },
+)
+
+// Calculate distance between documents
+doc1 := Document{ID: "doc1", Embedding: []float32{1.0, 0.0, 0.0}, Category: "A"}
+doc2 := Document{ID: "doc2", Embedding: []float32{0.0, 1.0, 0.0}, Category: "B"}
+distance := documentDistance.Distance(doc1, doc2)
+```
+
+### Creating a Weighted Distance Function
+
+```go
+// Define a custom type
+type Product struct {
+    ID        string
+    Embedding []float32
+    Category  string
+    Price     float32
+}
+
+// Define a custom surface
+type ProductSurface struct{}
+
+// Implement the Distance method
+func (s ProductSurface) Distance(a, b Product) float32 {
+    // Vector similarity component (70% weight)
+    vectorDist := hnsw.CosineDistance(a.Embedding, b.Embedding) * 0.7
+    
+    // Category matching component (20% weight)
+    var categoryDist float32
+    if a.Category == b.Category {
+        categoryDist = 0.0
+    } else {
+        categoryDist = 1.0
+    }
+    categoryDist *= 0.2
+    
+    // Price similarity component (10% weight)
+    priceDiff := a.Price - b.Price
+    if priceDiff < 0 {
+        priceDiff = -priceDiff
+    }
+    priceDist := (priceDiff / 1000.0) * 0.1
+    if priceDist > 0.1 {
+        priceDist = 0.1
+    }
+    
+    return vectorDist + categoryDist + priceDist
+}
+
+// Create a custom distance calculator
+productDistance := hnsw.NewVectorDistance[Product](ProductSurface{})
+```
+
 ## Thread-Safe Operations
 
 The library supports concurrent operations with a thread-safe implementation:
@@ -248,149 +323,43 @@ results, err := facetedGraph.Search(
     query,
     []facets.FacetFilter{priceFilter, categoryFilter},
     10,
-    2,
 )
 ```
 
-### Hybrid Extension
-
-The hybrid extension combines multiple search techniques to optimize performance across diverse scenarios:
-
-```go
-// Create a hybrid index configuration
-config := hybrid.DefaultIndexConfig()
-config.Type = hybrid.HybridIndexType
-config.ExactThreshold = 1000 // Use exact search for datasets smaller than 1000 vectors
-config.M = 16                // HNSW parameter for maximum connections per node
-config.EfSearch = 100        // HNSW parameter for search accuracy
-
-// Create a hybrid index
-hybridIndex, err := hybrid.NewHybridIndex[string](config)
-if err != nil {
-    log.Fatalf("Failed to create hybrid index: %v", err)
-}
-
-// Add vectors
-for i := 0; i < 10000; i++ {
-    vector := make([]float32, 128)
-    for j := range vector {
-        vector[j] = rand.Float32()
-    }
-    hybridIndex.Add(fmt.Sprintf("doc%d", i), vector)
-}
-
-// Search - the hybrid index will automatically select the best strategy
-query := make([]float32, 128)
-for i := range query {
-    query[i] = rand.Float32()
-}
-results, distances, err := hybridIndex.Search(query, 10)
-```
-
-#### Key Features
-
-- **Adaptive Strategy Selection**: Automatically chooses between HNSW, exact search, and LSH based on dataset size, dimensionality, and query patterns
-- **Learning from Queries**: Improves performance over time by analyzing query patterns and results
-- **Strategy Composition**: Combines multiple strategies for better results (e.g., using LSH to pre-filter candidates before HNSW search)
-- **Configurable Thresholds**: Fine-tune when to use each strategy based on your specific needs
-
-### Parquet Extension
-
-The Parquet extension implements hnsw support in parquet.
-
-```go
-// Create a Parquet storage configuration
-storageConfig := parquet.DefaultParquetStorageConfig()
-storageConfig.Directory = "my_vectors"
-storageConfig.Compression = compress.Codecs.Snappy
-storageConfig.BatchSize = 128 * 1024 * 1024 // 128MB batch size
-
-// Create a Parquet storage instance
-storage, err := parquet.NewParquetStorage[string](storageConfig)
-if err != nil {
-    log.Fatalf("Failed to create Parquet storage: %v", err)
-}
-defer storage.Close()
-
-// Store vectors
-vectors := map[string][]float32{
-    "doc1": {0.1, 0.2, 0.3},
-    "doc2": {0.2, 0.3, 0.4},
-    "doc3": {0.3, 0.4, 0.5},
-}
-if err := storage.StoreVectors(vectors); err != nil {
-    log.Fatalf("Failed to store vectors: %v", err)
-}
-
-// Load vectors
-loadedVectors, err := storage.LoadVectors()
-if err != nil {
-    log.Fatalf("Failed to load vectors: %v", err)
-}
-
-// Create a ParquetGraph that combines HNSW with Parquet storage
-pgConfig := parquet.ParquetGraphConfig{
-    M:        16,
-    Ml:       0.4,
-    EfSearch: 100,
-    Distance: hnsw.CosineDistance,
-    Storage:  storageConfig,
-}
-pg, err := parquet.NewParquetGraph[string](pgConfig)
-if err != nil {
-    log.Fatalf("Failed to create ParquetGraph: %v", err)
-}
-defer pg.Close()
-
-// Add vectors to the ParquetGraph
-for key, vector := range vectors {
-    if err := pg.Add(key, vector); err != nil {
-        log.Fatalf("Failed to add vector: %v", err)
-    }
-}
-
-// Search with the ParquetGraph
-query := []float32{0.2, 0.3, 0.4}
-results, err := pg.Search(query, 5)
-if err != nil {
-    log.Fatalf("Failed to search: %v", err)
-}
-```
-
-#### Key Features
-
-- **Columnar Storage**: Efficient storage and retrieval of vectors with Apache Parquet
-- **Memory Mapping**: Fast access to vectors without loading the entire dataset into memory
-- **Compression**: Reduces storage requirements with configurable compression codecs
-- **Batch Processing**: Optimized for reading and writing vectors in batches
-- **Schema Evolution**: Supports changes to your data structure over time
-
 ## Performance Considerations
 
-For optimal performance:
+- **Distance Function Selection**: Choose the appropriate distance function for your data. Cosine distance is often used for text embeddings, while Euclidean distance is common for image features.
+- **Parameter Tuning**: Adjust `M`, `EfConstruction`, and `EfSearch` parameters based on your dataset size and performance requirements.
+- **Memory Usage**: The memory usage grows linearly with the number of vectors and their dimensionality.
+- **Batch Operations**: Use batch operations for better performance when adding or removing multiple vectors.
+- **Custom Distance Functions**: While custom distance functions provide flexibility, they may introduce overhead. Benchmark your implementation to ensure it meets your performance requirements.
 
-1. **Dimensionality**: Reducing vector dimensions significantly improves performance
-2. **Connectivity (M)**: Higher values improve search accuracy but increase memory usage
-3. **Level Factor (Ml)**: Controls the graph hierarchy; lower values create more layers
-4. **EfSearch**: Higher values improve search accuracy at the cost of speed
+## Benchmarks
 
-## Memory Usage
+The following benchmarks compare different distance calculation approaches:
 
-The memory overhead of a graph is approximately:
+```
+BenchmarkDirectDistanceFunc-10          10068204               106.6 ns/op
+BenchmarkBasicSurface-10                11110857               107.5 ns/op
+BenchmarkContraMap-10                   10687495               113.1 ns/op
+BenchmarkVectorDistance-10              10065565               139.6 ns/op
+BenchmarkCustomSurface-10               11162084               126.6 ns/op
+BenchmarkWeightedDistance-10            10984856               109.2 ns/op
+BenchmarkHNSWNodeDistance-10             9822542               123.1 ns/op
+```
 
- The total memory used by the graph is given by:
+## Examples
 
-- `mem_graph = n * log(n) * size(id) * M`
-- `mem_base = n * d * 4`
-- `mem_total = mem_graph + mem_base`
+For complete examples, see the examples directory:
 
-where:
+- `examples/basic/main.go`: Basic usage of the HNSW graph
+- `examples/optimized_distance/main.go`: Demonstrates the optimized distance calculation approach
+- `examples/custom_distance/main.go`: Shows how to create a custom distance function that combines vector similarity with metadata
 
-- $n$ is the number of vectors
-- $\text{size(key)}$ is the size of the key in bytes
-- $M$ is the maximum number of neighbors per node
-- $d$ is the dimensionality of the vectors
+## Contributing
+
+Contributions to improve HNSW-Go are welcome. Please feel free to submit issues or pull requests.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License - see the LICENSE file for details.
