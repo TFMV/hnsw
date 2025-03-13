@@ -234,8 +234,9 @@ func convertArrowToKey[K cmp.Ordered](value interface{}) (K, error) {
 	return zero, fmt.Errorf("cannot convert %v (%T) to %T", value, value, zero)
 }
 
-// getArrayValue extracts a value from an Arrow array at the given index
-func getArrayValue(arr arrow.Array, i int) interface{} {
+// GetArrayValue extracts a value from an Arrow array at the given index.
+// It handles different Arrow array types and returns the appropriate Go value.
+func GetArrayValue(arr arrow.Array, i int) interface{} {
 	if arr.IsNull(i) {
 		return nil
 	}
@@ -262,7 +263,8 @@ func getArrayValue(arr arrow.Array, i int) interface{} {
 	}
 }
 
-// convertKeyToArrow converts a key to its Arrow representation
-func convertKeyToArrow[K cmp.Ordered](key K) interface{} {
+// ConvertKeyToArrow converts a key to its Arrow representation.
+// This is useful when working with Arrow arrays and tables.
+func ConvertKeyToArrow[K cmp.Ordered](key K) interface{} {
 	return key
 }

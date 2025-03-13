@@ -167,3 +167,8 @@ func (ps *ParquetStorage[K]) MetadataSchema() *arrow.Schema {
 		nil,
 	)
 }
+
+// GetDirectory returns the directory path where Parquet files are stored
+func (ps *ParquetStorage[K]) GetDirectory() string {
+	return ps.config.Directory
+}
