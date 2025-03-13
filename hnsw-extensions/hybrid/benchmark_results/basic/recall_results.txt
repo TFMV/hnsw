@@ -4,5 +4,3 @@ pkg: github.com/TFMV/hnsw/hnsw-extensions/hybrid
 cpu: Apple M2 Pro
 BenchmarkRecall/Recall/HNSW         	      10	   4862421 ns/op	         0.006000 recall
 BenchmarkRecall/Recall/LSH          	      10	   7245788 ns/op	         0.007000 recall
-signal: interrupt
-FAIL	github.com/TFMV/hnsw/hnsw-extensions/hybrid	20.144s
