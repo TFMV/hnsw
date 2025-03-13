@@ -266,6 +266,15 @@ func (s *MemoryFacetStore[K]) Filter(filters []FacetFilter) []FacetedNode[K] {
 	return result
 }
 
+// GetAllNodes returns all faceted nodes in the store.
+func (s *MemoryFacetStore[K]) GetAllNodes() []FacetedNode[K] {
+	result := make([]FacetedNode[K], 0, len(s.nodes))
+	for _, node := range s.nodes {
+		result = append(result, node)
+	}
+	return result
+}
+
 // FacetError represents an error related to facet operations.
 type FacetError struct {
 	Message string
