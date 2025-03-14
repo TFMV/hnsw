@@ -1,0 +1,301 @@
+package arrow
+
+import (
+	"cmp"
+	"fmt"
+
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+)
+
+// appendToBuilder appends a key to an Arrow array builder
+func appendToBuilder(builder array.Builder, key interface{}) {
+	switch b := builder.(type) {
+	case *array.Int32Builder:
+		if v, ok := key.(int32); ok {
+			b.Append(v)
+		} else if v, ok := key.(int); ok && v <= 2147483647 && v >= -2147483648 {
+			b.Append(int32(v))
+		} else {
+			b.AppendNull()
+		}
+	case *array.Int64Builder:
+		if v, ok := key.(int64); ok {
+			b.Append(v)
+		} else if v, ok := key.(int); ok {
+			b.Append(int64(v))
+		} else {
+			b.AppendNull()
+		}
+	case *array.Uint32Builder:
+		if v, ok := key.(uint32); ok {
+			b.Append(v)
+		} else if v, ok := key.(uint); ok && v <= 4294967295 {
+			b.Append(uint32(v))
+		} else {
+			b.AppendNull()
+		}
+	case *array.Uint64Builder:
+		if v, ok := key.(uint64); ok {
+			b.Append(v)
+		} else if v, ok := key.(uint); ok {
+			b.Append(uint64(v))
+		} else {
+			b.AppendNull()
+		}
+	case *array.Float32Builder:
+		if v, ok := key.(float32); ok {
+			b.Append(v)
+		} else {
+			b.AppendNull()
+		}
+	case *array.Float64Builder:
+		if v, ok := key.(float64); ok {
+			b.Append(v)
+		} else {
+			b.AppendNull()
+		}
+	case *array.StringBuilder:
+		if v, ok := key.(string); ok {
+			b.Append(v)
+		} else {
+			b.Append(fmt.Sprintf("%v", key))
+		}
+	case *array.BinaryBuilder:
+		if v, ok := key.([]byte); ok {
+			b.Append(v)
+		} else if v, ok := key.(string); ok {
+			b.Append([]byte(v))
+		} else {
+			b.AppendNull()
+		}
+	default:
+		// For unsupported types, try to convert to string
+		if b, ok := builder.(*array.StringBuilder); ok {
+			b.Append(fmt.Sprintf("%v", key))
+		}
+	}
+}
+
+// convertArrowToKey converts an Arrow value to a key of type K
+func convertArrowToKey[K cmp.Ordered](value interface{}) (K, error) {
+	var zero K
+	if value == nil {
+		return zero, fmt.Errorf("cannot convert nil to key")
+	}
+
+	// Try direct type assertion
+	if k, ok := value.(K); ok {
+		return k, nil
+	}
+
+	// Try type-specific conversions
+	switch any(zero).(type) {
+	case int:
+		switch v := value.(type) {
+		case int32:
+			return any(int(v)).(K), nil
+		case int64:
+			return any(int(v)).(K), nil
+		case float64:
+			return any(int(v)).(K), nil
+		case string:
+			var i int
+			if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to int: %w", v, err)
+			}
+			return any(i).(K), nil
+		}
+	case int32:
+		switch v := value.(type) {
+		case int:
+			return any(int32(v)).(K), nil
+		case int64:
+			return any(int32(v)).(K), nil
+		case float64:
+			return any(int32(v)).(K), nil
+		case string:
+			var i int32
+			if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to int32: %w", v, err)
+			}
+			return any(i).(K), nil
+		}
+	case int64:
+		switch v := value.(type) {
+		case int:
+			return any(int64(v)).(K), nil
+		case int32:
+			return any(int64(v)).(K), nil
+		case float64:
+			return any(int64(v)).(K), nil
+		case string:
+			var i int64
+			if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to int64: %w", v, err)
+			}
+			return any(i).(K), nil
+		}
+	case uint:
+		switch v := value.(type) {
+		case int:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int %d to uint", v)
+			}
+			return any(uint(v)).(K), nil
+		case int32:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int32 %d to uint", v)
+			}
+			return any(uint(v)).(K), nil
+		case int64:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int64 %d to uint", v)
+			}
+			return any(uint(v)).(K), nil
+		case uint32:
+			return any(uint(v)).(K), nil
+		case uint64:
+			return any(uint(v)).(K), nil
+		case string:
+			var u uint
+			if _, err := fmt.Sscanf(v, "%d", &u); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to uint: %w", v, err)
+			}
+			return any(u).(K), nil
+		}
+	case uint32:
+		switch v := value.(type) {
+		case int:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int %d to uint32", v)
+			}
+			return any(uint32(v)).(K), nil
+		case int32:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int32 %d to uint32", v)
+			}
+			return any(uint32(v)).(K), nil
+		case int64:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int64 %d to uint32", v)
+			}
+			return any(uint32(v)).(K), nil
+		case uint:
+			return any(uint32(v)).(K), nil
+		case uint64:
+			return any(uint32(v)).(K), nil
+		case string:
+			var u uint32
+			if _, err := fmt.Sscanf(v, "%d", &u); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to uint32: %w", v, err)
+			}
+			return any(u).(K), nil
+		}
+	case uint64:
+		switch v := value.(type) {
+		case int:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int %d to uint64", v)
+			}
+			return any(uint64(v)).(K), nil
+		case int32:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int32 %d to uint64", v)
+			}
+			return any(uint64(v)).(K), nil
+		case int64:
+			if v < 0 {
+				return zero, fmt.Errorf("cannot convert negative int64 %d to uint64", v)
+			}
+			return any(uint64(v)).(K), nil
+		case uint:
+			return any(uint64(v)).(K), nil
+		case uint32:
+			return any(uint64(v)).(K), nil
+		case string:
+			var u uint64
+			if _, err := fmt.Sscanf(v, "%d", &u); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to uint64: %w", v, err)
+			}
+			return any(u).(K), nil
+		}
+	case float32:
+		switch v := value.(type) {
+		case int:
+			return any(float32(v)).(K), nil
+		case int32:
+			return any(float32(v)).(K), nil
+		case int64:
+			return any(float32(v)).(K), nil
+		case float64:
+			return any(float32(v)).(K), nil
+		case string:
+			var f float32
+			if _, err := fmt.Sscanf(v, "%f", &f); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to float32: %w", v, err)
+			}
+			return any(f).(K), nil
+		}
+	case float64:
+		switch v := value.(type) {
+		case int:
+			return any(float64(v)).(K), nil
+		case int32:
+			return any(float64(v)).(K), nil
+		case int64:
+			return any(float64(v)).(K), nil
+		case float32:
+			return any(float64(v)).(K), nil
+		case string:
+			var f float64
+			if _, err := fmt.Sscanf(v, "%f", &f); err != nil {
+				return zero, fmt.Errorf("cannot convert string %q to float64: %w", v, err)
+			}
+			return any(f).(K), nil
+		}
+	case string:
+		return any(fmt.Sprintf("%v", value)).(K), nil
+	case []byte:
+		if s, ok := value.(string); ok {
+			return any([]byte(s)).(K), nil
+		}
+	}
+
+	return zero, fmt.Errorf("cannot convert %v (%T) to %T", value, value, zero)
+}
+
+// GetArrayValue extracts a value from an Arrow array at the given index.
+// It handles different Arrow array types and returns the appropriate Go value.
+func GetArrayValue(arr arrow.Array, i int) interface{} {
+	if arr.IsNull(i) {
+		return nil
+	}
+
+	switch a := arr.(type) {
+	case *array.Int32:
+		return a.Value(i)
+	case *array.Int64:
+		return a.Value(i)
+	case *array.Uint32:
+		return a.Value(i)
+	case *array.Uint64:
+		return a.Value(i)
+	case *array.Float32:
+		return a.Value(i)
+	case *array.Float64:
+		return a.Value(i)
+	case *array.String:
+		return a.Value(i)
+	case *array.Binary:
+		return a.Value(i)
+	default:
+		return nil
+	}
+}
+
+// ConvertKeyToArrow converts a key to its Arrow representation.
+// This is useful when working with Arrow arrays and tables.
+func ConvertKeyToArrow[K cmp.Ordered](key K) interface{} {
+	return key
+}
