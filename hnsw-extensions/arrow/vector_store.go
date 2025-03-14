@@ -11,12 +11,23 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 )
 
+// vectorPosition represents the position of a vector in the Arrow file
+type vectorPosition struct {
+	recordIndex int // Index of the record batch
+	rowIndex    int // Index of the row within the record batch
+}
+
 // VectorStore handles storage and retrieval of vectors in Arrow columnar format
 type VectorStore[K cmp.Ordered] struct {
 	storage *ArrowStorage[K]
 	dims    int
 	mu      sync.RWMutex
 	cache   map[K][]float32 // In-memory cache for frequently accessed vectors
+
+	// Position cache for faster retrieval
+	positionCache     sync.Map // Map[K]vectorPosition
+	positionCacheOnce sync.Once
+	positionCacheInit bool
 
 	// For lazy updates
 	dirty            bool
@@ -37,16 +48,17 @@ type VectorStore[K cmp.Ordered] struct {
 // NewVectorStore creates a new vector store
 func NewVectorStore[K cmp.Ordered](storage *ArrowStorage[K], dims int) *VectorStore[K] {
 	vs := &VectorStore[K]{
-		storage:          storage,
-		dims:             dims,
-		cache:            make(map[K][]float32, 10000), // Cache size of 10,000 vectors
-		pendingWrites:    make(map[K][]float32),
-		pendingDeletes:   make(map[K]bool),
-		flushInterval:    5 * time.Minute, // Default flush interval
-		lastFlushTime:    time.Now(),
-		maxPendingWrites: 1000, // Default max pending writes before forced flush
-		workerPool:       make(chan struct{}, storage.config.NumWorkers),
-		stopChan:         make(chan struct{}),
+		storage:           storage,
+		dims:              dims,
+		cache:             make(map[K][]float32, 10000), // Cache size of 10,000 vectors
+		pendingWrites:     make(map[K][]float32),
+		pendingDeletes:    make(map[K]bool),
+		flushInterval:     5 * time.Minute, // Default flush interval
+		lastFlushTime:     time.Now(),
+		maxPendingWrites:  1000, // Default max pending writes before forced flush
+		workerPool:        make(chan struct{}, storage.config.NumWorkers),
+		stopChan:          make(chan struct{}),
+		positionCacheInit: false,
 	}
 
 	// Start background flush goroutine
@@ -84,7 +96,6 @@ func (vs *VectorStore[K]) backgroundFlush() {
 
 			if shouldFlush {
 				if err := vs.Flush(); err != nil {
-					// Log error but continue
 					fmt.Printf("Error flushing vector store: %v\n", err)
 				}
 			}
@@ -163,6 +174,9 @@ func (vs *VectorStore[K]) DeleteVector(key K) {
 	// Remove from cache
 	delete(vs.cache, key)
 
+	// Remove from position cache
+	vs.positionCache.Delete(key)
+
 	// Mark for deletion
 	vs.pendingDeletes[key] = true
 	delete(vs.pendingWrites, key)
@@ -177,6 +191,7 @@ func (vs *VectorStore[K]) DeleteVectors(keys []K) {
 	// Remove from cache and mark for deletion
 	for _, key := range keys {
 		delete(vs.cache, key)
+		vs.positionCache.Delete(key)
 		vs.pendingDeletes[key] = true
 		delete(vs.pendingWrites, key)
 	}
@@ -185,6 +200,7 @@ func (vs *VectorStore[K]) DeleteVectors(keys []K) {
 
 // GetVector retrieves a vector by key
 func (vs *VectorStore[K]) GetVector(key K) ([]float32, error) {
+
 	// First check cache
 	vs.mu.RLock()
 	if vector, ok := vs.cache[key]; ok {
@@ -193,8 +209,27 @@ func (vs *VectorStore[K]) GetVector(key K) ([]float32, error) {
 	}
 	vs.mu.RUnlock()
 
-	// Not in cache, try to load from disk
-	vector, err := vs.getVectorFromArrow(key)
+	// Initialize position cache if needed
+	vs.positionCacheOnce.Do(func() {
+		if err := vs.initPositionCache(); err != nil {
+			fmt.Printf("Failed to initialize position cache: %v\n", err)
+		}
+	})
+
+	// Check if we have the position cached
+	if pos, ok := vs.getPositionFromCache(key); ok {
+		vector, err := vs.getVectorFromPosition(key, pos)
+		if err == nil {
+			// Add to cache
+			vs.mu.Lock()
+			vs.cache[key] = vector
+			vs.mu.Unlock()
+			return vector, nil
+		}
+	}
+
+	// Not in position cache or error getting from position, try to load from disk
+	vector, err := vs.scanFileForVector(key)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +240,215 @@ func (vs *VectorStore[K]) GetVector(key K) ([]float32, error) {
 	vs.mu.Unlock()
 
 	return vector, nil
+}
+
+// getPositionFromCache gets the position of a vector from the position cache
+func (vs *VectorStore[K]) getPositionFromCache(key K) (vectorPosition, bool) {
+	if posInterface, ok := vs.positionCache.Load(key); ok {
+		if pos, ok := posInterface.(vectorPosition); ok {
+			return pos, true
+		}
+	}
+	return vectorPosition{}, false
+}
+
+// initPositionCache initializes the position cache by scanning the Arrow file once
+func (vs *VectorStore[K]) initPositionCache() error {
+	fmt.Println("Initializing vector position cache...")
+
+	// Check if file exists
+	if _, err := os.Stat(vs.storage.vectorsFile); os.IsNotExist(err) {
+		vs.positionCacheInit = true
+		return nil
+	}
+
+	// Open Arrow file
+	file, err := os.Open(vs.storage.vectorsFile)
+	if err != nil {
+		return fmt.Errorf("failed to open Arrow file: %w", err)
+	}
+	defer file.Close()
+
+	// Create Arrow reader
+	reader, err := ipc.NewFileReader(file, ipc.WithAllocator(vs.storage.alloc))
+	if err != nil {
+		return fmt.Errorf("failed to create Arrow reader: %w", err)
+	}
+	defer reader.Close()
+
+	// Read all records and build position cache
+	for i := 0; i < reader.NumRecords(); i++ {
+		record, err := reader.Record(i)
+		if err != nil {
+			return fmt.Errorf("failed to read record: %w", err)
+		}
+
+		// Get key column
+		keyCol := record.Column(0)
+
+		// Iterate through records to build position cache
+		for j := 0; j < int(record.NumRows()); j++ {
+			recordKey := GetArrayValue(keyCol, j)
+			k, err := convertArrowToKey[K](recordKey)
+			if err != nil {
+				continue
+			}
+
+			vs.positionCache.Store(k, vectorPosition{
+				recordIndex: i,
+				rowIndex:    j,
+			})
+		}
+
+		record.Release()
+	}
+
+	vs.positionCacheInit = true
+	fmt.Println("Position cache initialized")
+	return nil
+}
+
+// getVectorFromPosition retrieves a vector from a specific position in the Arrow file
+func (vs *VectorStore[K]) getVectorFromPosition(key K, pos vectorPosition) ([]float32, error) {
+
+	// Check if file exists
+	if _, err := os.Stat(vs.storage.vectorsFile); os.IsNotExist(err) {
+		return nil, fmt.Errorf("vector file does not exist")
+	}
+
+	// Open Arrow file
+	file, err := os.Open(vs.storage.vectorsFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open Arrow file: %w", err)
+	}
+	defer file.Close()
+
+	// Create Arrow reader
+	reader, err := ipc.NewFileReader(file, ipc.WithAllocator(vs.storage.alloc))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Arrow reader: %w", err)
+	}
+	defer reader.Close()
+
+	// Check if record index is valid
+	if pos.recordIndex >= reader.NumRecords() {
+		return nil, fmt.Errorf("invalid record index: %d", pos.recordIndex)
+	}
+
+	// Read the specific record
+	record, err := reader.Record(pos.recordIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read record: %w", err)
+	}
+	defer record.Release()
+
+	// Check if row index is valid
+	if pos.rowIndex >= int(record.NumRows()) {
+		return nil, fmt.Errorf("invalid row index: %d", pos.rowIndex)
+	}
+
+	// Get key and vector columns
+	keyCol := record.Column(0)
+	vectorCol := record.Column(1)
+
+	// Verify the key matches
+	recordKey := GetArrayValue(keyCol, pos.rowIndex)
+	k, err := convertArrowToKey[K](recordKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert key: %w", err)
+	}
+
+	if k != key {
+		return nil, fmt.Errorf("key mismatch: expected %v, got %v", key, k)
+	}
+
+	// Extract vector
+	listArray := vectorCol.(*array.List)
+	valueArray := listArray.ListValues().(*array.Float32)
+
+	start := int(listArray.Offsets()[pos.rowIndex])
+	end := int(listArray.Offsets()[pos.rowIndex+1])
+
+	vector := make([]float32, end-start)
+	for v := start; v < end; v++ {
+		vector[v-start] = valueArray.Value(v)
+	}
+
+	return vector, nil
+}
+
+// scanFileForVector scans the Arrow file for a vector with the given key
+func (vs *VectorStore[K]) scanFileForVector(key K) ([]float32, error) {
+
+	// Check if file exists
+	if _, err := os.Stat(vs.storage.vectorsFile); os.IsNotExist(err) {
+		errMsg := fmt.Sprintf("vector file does not exist for key %v", key)
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	// Open Arrow file
+	file, err := os.Open(vs.storage.vectorsFile)
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to open Arrow file for key %v: %v", key, err)
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	defer file.Close()
+
+	// Create Arrow reader
+	reader, err := ipc.NewFileReader(file, ipc.WithAllocator(vs.storage.alloc))
+	if err != nil {
+		errMsg := fmt.Sprintf("failed to create Arrow reader for key %v: %v", key, err)
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	defer reader.Close()
+
+	// Read all records
+	for i := 0; i < reader.NumRecords(); i++ {
+		record, err := reader.Record(i)
+		if err != nil {
+			errMsg := fmt.Sprintf("failed to read record %d for key %v: %v", i, key, err)
+			return nil, fmt.Errorf("%s", errMsg)
+		}
+		defer record.Release()
+
+		// Get key and vector columns
+		keyCol := record.Column(0)
+		vectorCol := record.Column(1)
+
+		// Iterate through records to find matching key
+		for j := 0; j < int(record.NumRows()); j++ {
+			recordKey := GetArrayValue(keyCol, j)
+			k, err := convertArrowToKey[K](recordKey)
+			if err != nil {
+				continue
+			}
+
+			if k == key {
+				// Found matching key, extract vector
+				listArray := vectorCol.(*array.List)
+				valueArray := listArray.ListValues().(*array.Float32)
+
+				start := int(listArray.Offsets()[j])
+				end := int(listArray.Offsets()[j+1])
+
+				vector := make([]float32, end-start)
+				for v := start; v < end; v++ {
+					vector[v-start] = valueArray.Value(v)
+				}
+
+				// Store position in cache
+				vs.positionCache.Store(key, vectorPosition{
+					recordIndex: i,
+					rowIndex:    j,
+				})
+
+				return vector, nil
+			}
+		}
+	}
+
+	errMsg := fmt.Sprintf("vector not found for key %v", key)
+	return nil, fmt.Errorf("%s", errMsg)
 }
 
 // GetVectorsBatch retrieves multiple vectors by key
@@ -228,19 +472,45 @@ func (vs *VectorStore[K]) GetVectorsBatch(keys []K) (map[K][]float32, error) {
 		return result, nil
 	}
 
-	// Load missing keys from disk
-	missingVectors, err := vs.getVectorsBatchFromArrow(missingKeys)
-	if err != nil {
-		return result, err
+	// Initialize position cache if needed
+	vs.positionCacheOnce.Do(func() {
+		if err := vs.initPositionCache(); err != nil {
+			fmt.Printf("Failed to initialize position cache: %v\n", err)
+		}
+	})
+
+	// Try to get vectors from position cache
+	remainingKeys := make([]K, 0, len(missingKeys))
+	for _, key := range missingKeys {
+		if pos, ok := vs.getPositionFromCache(key); ok {
+			vector, err := vs.getVectorFromPosition(key, pos)
+			if err == nil {
+				// Add to result and cache
+				result[key] = vector
+				vs.mu.Lock()
+				vs.cache[key] = vector
+				vs.mu.Unlock()
+			} else {
+				remainingKeys = append(remainingKeys, key)
+			}
+		} else {
+			remainingKeys = append(remainingKeys, key)
+		}
 	}
 
-	// Add missing vectors to cache and result
-	vs.mu.Lock()
-	for k, v := range missingVectors {
-		vs.cache[k] = v
-		result[k] = v
+	// If there are still missing keys, scan the file
+	if len(remainingKeys) > 0 {
+		for _, key := range remainingKeys {
+			vector, err := vs.scanFileForVector(key)
+			if err == nil {
+				// Add to result and cache
+				result[key] = vector
+				vs.mu.Lock()
+				vs.cache[key] = vector
+				vs.mu.Unlock()
+			}
+		}
 	}
-	vs.mu.Unlock()
 
 	return result, nil
 }
@@ -289,6 +559,11 @@ func (vs *VectorStore[K]) Flush() error {
 		return fmt.Errorf("failed to write vectors to file: %w", err)
 	}
 
+	// Reset position cache
+	vs.positionCacheInit = false
+	vs.positionCache = sync.Map{}
+	vs.positionCacheOnce = sync.Once{}
+
 	// Update state
 	vs.mu.Lock()
 	vs.pendingWrites = make(map[K][]float32)
@@ -299,144 +574,6 @@ func (vs *VectorStore[K]) Flush() error {
 	vs.mu.Unlock()
 
 	return nil
-}
-
-// getVectorFromArrow retrieves a vector from the Arrow file
-func (vs *VectorStore[K]) getVectorFromArrow(key K) ([]float32, error) {
-	// Check if file exists
-	if _, err := os.Stat(vs.storage.vectorsFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("vector file does not exist")
-	}
-
-	// Open Arrow file
-	file, err := os.Open(vs.storage.vectorsFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open Arrow file: %w", err)
-	}
-	defer file.Close()
-
-	// Create Arrow reader
-	reader, err := ipc.NewFileReader(file, ipc.WithAllocator(vs.storage.alloc))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Arrow reader: %w", err)
-	}
-	defer reader.Close()
-
-	// Read all records (in a real implementation, you'd want to filter by key)
-	for i := 0; i < reader.NumRecords(); i++ {
-		record, err := reader.Record(i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read record: %w", err)
-		}
-		defer record.Release()
-
-		// Get key and vector columns
-		keyCol := record.Column(0)
-		vectorCol := record.Column(1)
-
-		// Iterate through records to find matching key
-		for j := 0; j < int(record.NumRows()); j++ {
-			recordKey := GetArrayValue(keyCol, j)
-			k, err := convertArrowToKey[K](recordKey)
-			if err != nil {
-				continue
-			}
-
-			if k == key {
-				// Found matching key, extract vector
-				listArray := vectorCol.(*array.List)
-				valueArray := listArray.ListValues().(*array.Float32)
-
-				start := int(listArray.Offsets()[j])
-				end := int(listArray.Offsets()[j+1])
-
-				vector := make([]float32, end-start)
-				for v := start; v < end; v++ {
-					vector[v-start] = valueArray.Value(v)
-				}
-
-				return vector, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("vector not found for key")
-}
-
-// getVectorsBatchFromArrow retrieves multiple vectors from the Arrow file
-func (vs *VectorStore[K]) getVectorsBatchFromArrow(keys []K) (map[K][]float32, error) {
-	result := make(map[K][]float32)
-
-	// Check if file exists
-	if _, err := os.Stat(vs.storage.vectorsFile); os.IsNotExist(err) {
-		return result, nil
-	}
-
-	// Create a set of missing keys for faster lookup
-	missingKeySet := make(map[K]bool, len(keys))
-	for _, key := range keys {
-		missingKeySet[key] = true
-	}
-
-	// Open Arrow file
-	file, err := os.Open(vs.storage.vectorsFile)
-	if err != nil {
-		return result, fmt.Errorf("failed to open Arrow file: %w", err)
-	}
-	defer file.Close()
-
-	// Create Arrow reader
-	reader, err := ipc.NewFileReader(file, ipc.WithAllocator(vs.storage.alloc))
-	if err != nil {
-		return result, fmt.Errorf("failed to create Arrow reader: %w", err)
-	}
-	defer reader.Close()
-
-	// Read all records
-	for i := 0; i < reader.NumRecords(); i++ {
-		record, err := reader.Record(i)
-		if err != nil {
-			return result, fmt.Errorf("failed to read record: %w", err)
-		}
-		defer record.Release()
-
-		// Get key and vector columns
-		keyCol := record.Column(0)
-		vectorCol := record.Column(1)
-
-		// Iterate through records to find matching keys
-		for j := 0; j < int(record.NumRows()); j++ {
-			recordKey := GetArrayValue(keyCol, j)
-			k, err := convertArrowToKey[K](recordKey)
-			if err != nil {
-				continue
-			}
-
-			if missingKeySet[k] {
-				// Found matching key, extract vector
-				listArray := vectorCol.(*array.List)
-				valueArray := listArray.ListValues().(*array.Float32)
-
-				start := int(listArray.Offsets()[j])
-				end := int(listArray.Offsets()[j+1])
-
-				vector := make([]float32, end-start)
-				for v := start; v < end; v++ {
-					vector[v-start] = valueArray.Value(v)
-				}
-
-				result[k] = vector
-				delete(missingKeySet, k)
-
-				// If we found all missing keys, we can stop
-				if len(missingKeySet) == 0 {
-					return result, nil
-				}
-			}
-		}
-	}
-
-	return result, nil
 }
 
 // WriteVectorsToFile writes vectors to the Arrow file

@@ -2,6 +2,7 @@ package arrow
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -46,17 +47,146 @@ type ArrowGraphConfig struct {
 	Ml       float64           // Level generation factor
 	EfSearch int               // Size of dynamic candidate list during search
 	Distance hnsw.DistanceFunc // Distance function
-	Storage  ArrowStorageConfig
+
+	// Storage-related fields
+	StorageDir    string        // Directory for Arrow files
+	NumWorkers    int           // Number of worker threads for batch operations
+	BatchSize     int           // Batch size for processing
+	FlushInterval time.Duration // How often to flush to disk
+
+	// Memory management
+	MemoryPoolSize int64 // Size of memory pool for Arrow allocator
+	MemoryMap      bool  // Whether to use memory mapping for files
+
+	// Advanced options
+	EnableCompression bool   // Whether to enable compression for Arrow files
+	CompressionType   string // Type of compression to use (e.g., "zstd", "lz4")
+	CompressionLevel  int    // Compression level (1-9)
 }
 
-// DefaultArrowGraphConfig returns the default configuration
+// MarshalJSON implements the json.Marshaler interface for ArrowGraphConfig
+func (c ArrowGraphConfig) MarshalJSON() ([]byte, error) {
+	// Create a serializable version without the function
+	type SerializableConfig struct {
+		M                 int     `json:"m"`
+		Ml                float64 `json:"ml"`
+		EfSearch          int     `json:"ef_search"`
+		DistanceName      string  `json:"distance_name"`
+		StorageDir        string  `json:"storage_dir"`
+		NumWorkers        int     `json:"num_workers"`
+		BatchSize         int     `json:"batch_size"`
+		FlushInterval     int64   `json:"flush_interval_ns"`
+		MemoryPoolSize    int64   `json:"memory_pool_size"`
+		MemoryMap         bool    `json:"memory_map"`
+		EnableCompression bool    `json:"enable_compression"`
+		CompressionType   string  `json:"compression_type"`
+		CompressionLevel  int     `json:"compression_level"`
+	}
+
+	// Determine distance function name by comparing function pointers
+	distName := "cosine" // Default
+
+	// Get the pointer to the distance function
+	distPtr := fmt.Sprintf("%p", c.Distance)
+
+	// Compare with known distance functions
+	euclideanPtr := fmt.Sprintf("%p", hnsw.EuclideanDistance)
+	cosinePtr := fmt.Sprintf("%p", hnsw.CosineDistance)
+
+	switch distPtr {
+	case euclideanPtr:
+		distName = "euclidean"
+	case cosinePtr:
+		distName = "cosine"
+		// Add other distance functions as needed
+	}
+
+	sc := SerializableConfig{
+		M:                 c.M,
+		Ml:                c.Ml,
+		EfSearch:          c.EfSearch,
+		DistanceName:      distName,
+		StorageDir:        c.StorageDir,
+		NumWorkers:        c.NumWorkers,
+		BatchSize:         c.BatchSize,
+		FlushInterval:     c.FlushInterval.Nanoseconds(),
+		MemoryPoolSize:    c.MemoryPoolSize,
+		MemoryMap:         c.MemoryMap,
+		EnableCompression: c.EnableCompression,
+		CompressionType:   c.CompressionType,
+		CompressionLevel:  c.CompressionLevel,
+	}
+
+	return json.Marshal(sc)
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface for ArrowGraphConfig
+func (c *ArrowGraphConfig) UnmarshalJSON(data []byte) error {
+	// Parse the serializable version
+	var sc struct {
+		M                 int     `json:"m"`
+		Ml                float64 `json:"ml"`
+		EfSearch          int     `json:"ef_search"`
+		DistanceName      string  `json:"distance_name"`
+		StorageDir        string  `json:"storage_dir"`
+		NumWorkers        int     `json:"num_workers"`
+		BatchSize         int     `json:"batch_size"`
+		FlushInterval     int64   `json:"flush_interval_ns"`
+		MemoryPoolSize    int64   `json:"memory_pool_size"`
+		MemoryMap         bool    `json:"memory_map"`
+		EnableCompression bool    `json:"enable_compression"`
+		CompressionType   string  `json:"compression_type"`
+		CompressionLevel  int     `json:"compression_level"`
+	}
+
+	if err := json.Unmarshal(data, &sc); err != nil {
+		return err
+	}
+
+	// Set the fields
+	c.M = sc.M
+	c.Ml = sc.Ml
+	c.EfSearch = sc.EfSearch
+	c.StorageDir = sc.StorageDir
+	c.NumWorkers = sc.NumWorkers
+	c.BatchSize = sc.BatchSize
+	c.FlushInterval = time.Duration(sc.FlushInterval)
+	c.MemoryPoolSize = sc.MemoryPoolSize
+	c.MemoryMap = sc.MemoryMap
+	c.EnableCompression = sc.EnableCompression
+	c.CompressionType = sc.CompressionType
+	c.CompressionLevel = sc.CompressionLevel
+
+	// Set the distance function based on name
+	switch sc.DistanceName {
+	case "euclidean":
+		c.Distance = hnsw.EuclideanDistance
+	case "cosine":
+		c.Distance = hnsw.CosineDistance
+	// Add other distance functions as needed
+	default:
+		c.Distance = hnsw.CosineDistance // Default
+	}
+
+	return nil
+}
+
+// DefaultArrowGraphConfig returns the default configuration for the Arrow-based HNSW graph
 func DefaultArrowGraphConfig() ArrowGraphConfig {
 	return ArrowGraphConfig{
-		M:        16,
-		Ml:       0.25,
-		EfSearch: 20,
-		Distance: hnsw.CosineDistance,
-		Storage:  DefaultArrowStorageConfig(),
+		M:                 16,
+		Ml:                0.4,
+		EfSearch:          100,
+		Distance:          hnsw.CosineDistance,
+		StorageDir:        "arrow_data",
+		NumWorkers:        4,
+		BatchSize:         1000,
+		FlushInterval:     5 * time.Minute,
+		MemoryPoolSize:    1 << 30, // 1GB
+		MemoryMap:         true,
+		EnableCompression: false,
+		CompressionType:   "zstd",
+		CompressionLevel:  3,
 	}
 }
 
@@ -69,8 +199,17 @@ type searchCandidate[K cmp.Ordered] struct {
 
 // NewArrowGraph creates a new HNSW graph with Arrow storage
 func NewArrowGraph[K cmp.Ordered](config ArrowGraphConfig) (*ArrowGraph[K], error) {
+	// Create storage configuration
+	storageConfig := ArrowStorageConfig{
+		Directory:      config.StorageDir,
+		MemoryPoolSize: config.MemoryPoolSize,
+		MemoryMap:      config.MemoryMap,
+		BatchSize:      int64(config.BatchSize),
+		NumWorkers:     config.NumWorkers,
+	}
+
 	// Create storage
-	storage, err := NewArrowStorage[K](config.Storage)
+	storage, err := NewArrowStorage[K](storageConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create storage: %w", err)
 	}
@@ -88,11 +227,11 @@ func NewArrowGraph[K cmp.Ordered](config ArrowGraphConfig) (*ArrowGraph[K], erro
 		layers:     make([]map[K]map[K]struct{}, 0),
 		dimensions: 0,
 		nodeCount:  0,
-		workerPool: make(chan struct{}, config.Storage.NumWorkers),
+		workerPool: make(chan struct{}, config.NumWorkers),
 	}
 
 	// Initialize worker pool
-	for i := 0; i < config.Storage.NumWorkers; i++ {
+	for i := 0; i < config.NumWorkers; i++ {
 		graph.workerPool <- struct{}{}
 	}
 

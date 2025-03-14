@@ -49,8 +49,8 @@ func setupArrowIndex(b *testing.B) *arrowext.ArrowIndex[int] {
 
 	// Create index configuration
 	config := arrowext.DefaultArrowGraphConfig()
-	config.Storage.Directory = tempDir
-	config.Storage.NumWorkers = 4
+	config.StorageDir = tempDir
+	config.NumWorkers = 4
 
 	// Create index
 	index, err := arrowext.NewArrowIndex[int](config)
@@ -269,7 +269,7 @@ func BenchmarkArrowLoad(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Create a new index with the same configuration
 		config := arrowext.DefaultArrowGraphConfig()
-		config.Storage.Directory = dir
+		config.StorageDir = dir
 
 		// Create index
 		newIndex, err := arrowext.NewArrowIndex[int](config)
@@ -404,8 +404,8 @@ func BenchmarkArrowAppenderStream(b *testing.B) {
 
 	// Create index configuration
 	config := arrowext.DefaultArrowGraphConfig()
-	config.Storage.Directory = tempDir
-	config.Storage.NumWorkers = 4
+	config.StorageDir = tempDir
+	config.NumWorkers = 4
 
 	// Create index
 	index, err := arrowext.NewArrowIndex[int](config)

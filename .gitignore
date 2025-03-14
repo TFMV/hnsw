@@ -43,3 +43,5 @@ testdata/
 .DS_Store
 
 __debug_bin**
+
+python/

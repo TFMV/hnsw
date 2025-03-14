@@ -25,11 +25,11 @@ func main() {
 	config.M = 16
 	config.EfSearch = 100
 	config.Distance = hnsw.CosineDistance
-	config.Storage.Directory = "arrow_example_data"
-	config.Storage.NumWorkers = 4
+	config.StorageDir = "arrow_example_data"
+	config.NumWorkers = 4
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(config.Storage.Directory, 0755); err != nil {
+	if err := os.MkdirAll(config.StorageDir, 0755); err != nil {
 		fmt.Printf("Error creating directory: %v\n", err)
 		return
 	}
@@ -136,7 +136,7 @@ func main() {
 	// Storage statistics
 	fmt.Println("Storage statistics:")
 	for key, value := range stats {
-		if key[:8] == "storage_" {
+		if len(key) >= 8 && key[:8] == "storage_" {
 			fmt.Printf("  %s: %v\n", key[8:], value)
 		}
 	}
