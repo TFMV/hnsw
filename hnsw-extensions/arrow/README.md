@@ -11,6 +11,7 @@ This extension provides a high-performance implementation of the Hierarchical Na
 - **Configurable**: Flexible configuration options for tuning performance and storage requirements
 - **Generic Keys**: Supports any ordered key type (string, int, etc.) for vector identification
 - **Incremental Updates**: Efficiently handles incremental updates to the index
+- **Zero-Copy Appender**: Stream Arrow record batches directly into the index with minimal copying
 
 ## Architecture
 
@@ -20,27 +21,34 @@ The Arrow extension consists of several key components:
 2. **ArrowGraph**: Core implementation of the HNSW graph algorithm with Arrow storage
 3. **ArrowStorage**: Manages the storage of vectors and graph structure using Arrow files
 4. **VectorStore**: Handles efficient storage and retrieval of vectors using Arrow columnar format
+5. **ArrowAppender**: Streams Arrow record batches directly into the index with zero-copy operations
 
 ## Performance
 
 Benchmark results on Apple M2 Pro:
 
 ```
-BenchmarkArrowAdd-10             10000    542339 ns/op    205876 B/op    1676 allocs/op
-BenchmarkArrowBatchAdd-10          100  43889093 ns/op  18317911 B/op  145712 allocs/op
-BenchmarkArrowSearch-10           1620    630069 ns/op    210871 B/op    1984 allocs/op
-BenchmarkArrowBatchSearch-10        62  20542523 ns/op  20865025 B/op  207659 allocs/op
-BenchmarkArrowSave-10              106  13963529 ns/op  14986840 B/op  418873 allocs/op
-BenchmarkArrowLoad-10              595   1930692 ns/op   3490039 B/op   41075 allocs/op
+BenchmarkArrowAdd-10                10000    428835 ns/op    187214 B/op    1484 allocs/op
+BenchmarkArrowBatchAdd-10             100  39931697 ns/op  17541071 B/op  136566 allocs/op
+BenchmarkArrowSearch-10              1606    636877 ns/op    210998 B/op    2019 allocs/op
+BenchmarkArrowBatchSearch-10           57  19326813 ns/op  19981149 B/op  199574 allocs/op
+BenchmarkArrowSave-10                 100  11427862 ns/op  15069133 B/op  427146 allocs/op
+BenchmarkArrowLoad-10                 595   2040059 ns/op   3553920 B/op   39922 allocs/op
+BenchmarkArrowAppenderSingle-10     10000    410228 ns/op    180517 B/op    1420 allocs/op
+BenchmarkArrowAppenderBatch-10        100  42010736 ns/op  18061169 B/op  140220 allocs/op
+BenchmarkArrowAppenderStream-10         6  389837236 ns/op 161608281 B/op 1310294 allocs/op
 ```
 
 ### Performance Analysis
 
-- **Single Vector Add**: ~542μs per vector with moderate memory usage
-- **Batch Vector Add**: More efficient for adding multiple vectors at once (~439μs per vector in batches of 100)
-- **Search Performance**: ~630μs per search query, making it suitable for real-time applications
-- **Batch Search**: Significantly more efficient for multiple queries (~332μs per query when searching in batches)
-- **Save/Load**: Fast persistence with ~14ms to save and ~2ms to load a 10,000 vector index
+- **Single Vector Add**: ~429μs per vector with moderate memory usage
+- **Batch Vector Add**: More efficient for adding multiple vectors at once (~399μs per vector in batches of 100)
+- **Search Performance**: ~637μs per search query, making it suitable for real-time applications
+- **Batch Search**: Significantly more efficient for multiple queries (~339μs per query when searching in batches)
+- **Save/Load**: Fast persistence with ~11ms to save and ~2ms to load a 10,000 vector index
+- **Arrow Appender Single**: ~410μs per vector, slightly faster than direct Add with less memory usage
+- **Arrow Appender Batch**: ~420μs per vector in batches of 100, comparable to direct BatchAdd
+- **Arrow Appender Stream**: Processes large batches of vectors efficiently, but with higher memory usage due to Arrow record batch creation
 
 These benchmarks were performed with 128-dimensional vectors and a 10,000 vector index. Performance may vary based on vector dimensions, index size, and hardware.
 
@@ -81,6 +89,63 @@ config := arrow.ArrowGraphConfig{
 index, err := arrow.NewArrowIndex[int](config)
 if err != nil {
     // Handle error
+}
+```
+
+### Using the Arrow Appender
+
+The Arrow Appender allows you to stream Arrow record batches directly into the index with minimal copying:
+
+```go
+// Create an Arrow appender
+appenderConfig := arrow.DefaultAppenderConfig()
+appender := arrow.NewArrowAppender[string](index, appenderConfig)
+
+// Append a record batch
+if err := appender.AppendBatch(recordBatch); err != nil {
+    // Handle error
+}
+
+// Append a table
+if err := appender.AppendTable(table); err != nil {
+    // Handle error
+}
+
+// Stream records asynchronously
+recordChan := make(chan arrow.Record, 10)
+errChan := appender.StreamRecordsAsync(recordChan)
+
+// Send records to the channel
+for record := range sourceRecords {
+    recordChan <- record
+}
+close(recordChan)
+
+// Check for errors
+if err := <-errChan; err != nil {
+    // Handle error
+}
+```
+
+The appender expects Arrow record batches with a specific schema:
+
+```go
+schema := arrow.NewSchema(
+    []arrow.Field{
+        {Name: "key", Type: arrow.BinaryTypes.String}, // Key field (can be any supported type)
+        {Name: "vector", Type: arrow.ListOf(arrow.PrimitiveTypes.Float32)}, // Vector field (must be list of float32)
+    },
+    nil,
+)
+```
+
+You can customize the field names using the appender configuration:
+
+```go
+appenderConfig := arrow.AppenderConfig{
+    KeyField:    "id",        // Custom key field name
+    VectorField: "embedding", // Custom vector field name
+    BatchSize:   1000,        // Batch size for processing
 }
 ```
 
@@ -213,3 +278,7 @@ if err != nil {
 - Support for filtering during search
 - Integration with other Arrow-based tools and libraries
 - Memory-mapped files for improved performance
+
+## License
+
+This extension is licensed under the same license as the main HNSW library.
